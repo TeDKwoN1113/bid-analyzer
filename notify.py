@@ -115,16 +115,6 @@ def _title(r) -> str:
     return f"<b>{name}</b>"
 
 
-def similar_history(df: pd.DataFrame, row, keywords) -> pd.DataFrame:
-    """추천 계산용 과거 공고: 같은 업종, 기초금액 ±50%, 같은 기관이 충분하면 기관 우선."""
-    h = analysis.apply_filters(df[df["sajung"].notna()], keywords=keywords)
-    base = row["base_amt"]
-    if pd.notna(base) and base > 0:
-        h = h[(h["base_amt"] >= base * 0.5) & (h["base_amt"] <= base * 1.5)]
-    same = h[h["org"] == row["org"]]
-    return same if len(analysis.win_windows(same)) >= 15 else h
-
-
 def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
     """보낼 메시지 본문과 (공고키, 종류) 목록."""
     s = load_settings()
@@ -165,7 +155,7 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
             av = f" | A값 {_won(r['a_value'])}" if r["a_value"] else ""
             line = (f"• {_title(r)}\n  {_e(r['org'])} | 개찰 {_dt(r['open_dt'])}\n"
                     f"  기초금액 {_won(r['base_amt'])} | 하한율 {lr}{av}")
-            h = similar_history(df, r, kw)
+            h = analysis.similar_history(df, r, kw)
             rec = analysis.recommend(h, top=1)
             if rec and pd.notna(r["lower_rate"]):
                 x = rec[0]

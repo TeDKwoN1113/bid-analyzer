@@ -33,7 +33,7 @@ if _pw and not st.session_state.get("authed"):
 
 # ---------------- 사이드바 ----------------
 st.sidebar.title("⚡ 입찰 분석기")
-page = st.sidebar.radio("메뉴", ["📋 공고 현황", "📊 사정율 분석", "🧮 투찰 계산기", "📝 우리 투찰",
+page = st.sidebar.radio("메뉴", ["🏠 오늘의 투찰", "📋 공고 현황", "📊 사정율 분석", "🧮 투찰 계산기", "📝 우리 투찰",
                                "🏢 경쟁업체", "⬇️ 데이터 수집", "⚙️ 설정 · API 점검"])
 
 use_sample = st.sidebar.toggle("샘플(연습용) 데이터로 보기", value=not settings["service_key"],
@@ -122,8 +122,104 @@ WIN_HELP = ("낙찰확률: 과거 비슷한 공고들에 이 사정율로 넣었
             "※ 과거 통계이며 낙찰을 보장하지 않습니다. 적격심사 통과는 별도입니다.")
 
 
+# ---------------- 오늘의 투찰 ----------------
+if page == "🏠 오늘의 투찰":
+    st.header("🏠 오늘의 투찰")
+    need_data()
+    now = pd.Timestamp.now()
+    elig = analysis.apply_filters(raw, keywords=keywords, regions=regions, max_amt=amt_range[1] * 1e8,
+                                  min_amt=amt_range[0] * 1e8 or None, eligible_only=only_ok)
+    elig = elig.assign(close_date=pd.to_datetime(elig["close_dt"], errors="coerce", format="mixed"))
+    todo = elig[(elig["open_date"] >= now) & elig["plan_price"].isna()].copy()
+    todo["마감기준"] = todo["close_date"].fillna(todo["open_date"])
+    todo = todo[todo["마감기준"] >= now].sort_values("마감기준")
+    recent = elig[(elig["open_date"] < now) & (elig["open_date"] >= now - pd.Timedelta(days=3))]
+    recent = recent[recent["plan_price"].notna() | recent["first_company"].notna()]
+    mine = db.query_df("SELECT bid_key, amount FROM my_bids")
+    mine_map = dict(zip(mine["bid_key"], mine["amount"]))
+
+    st.markdown(f"투찰 가능 **{len(todo)}건** · 3일 내 마감 "
+                f"**{(todo['마감기준'] <= now + pd.Timedelta(days=3)).sum()}건** · "
+                f"기초금액 공개 **{todo['base_amt_notice'].notna().sum()}건** · 최근 3일 개찰 **{len(recent)}건**")
+
+    only_base = st.toggle("기초금액 공개된 공고만", value=False)
+    if only_base:
+        todo = todo[todo["base_amt_notice"].notna()]
+    if todo.empty:
+        st.info("조건에 맞는 개찰 전 공고가 없습니다. 왼쪽 필터를 넓혀보세요.")
+
+    def dday(t):
+        if pd.isna(t):
+            return "-"
+        d = (t.normalize() - now.normalize()).days
+        return "오늘 마감" if d == 0 else f"D-{d}"
+
+    for _, r in todo.head(40).iterrows():
+        with st.container(border=True):
+            top = st.columns([5, 1])
+            link = f"[{r['name']}]({r['url']})" if isinstance(r["url"], str) and r["url"].startswith("http") else r["name"]
+            top[0].markdown(f"**{link}**")
+            top[1].markdown(f"**{dday(r['마감기준'])}**")
+            limit = r["allowed_regions"] or ("제한없음" if r["allowed_regions_known"] else "확인중")
+            st.caption(f"{r['org']} · 참가지역 {limit} · 투찰마감 "
+                       f"{'-' if pd.isna(r['close_date']) else r['close_date'].strftime('%m/%d %H:%M')} · "
+                       f"개찰 {r['open_date'].strftime('%m/%d %H:%M')} · {r['contract_method'] or r['method'] or ''}")
+            if pd.isna(r["base_amt_notice"]):
+                st.write(f"추정가격 {won(r['est_price'])} · 기초금액 **미공개** (공개되면 텔레그램으로 알려드립니다)")
+                continue
+            a_val = r["a_value"] or 0
+            st.write(f"기초금액 **{won(r['base_amt'])}** · 하한율 "
+                     f"{'-' if pd.isna(r['lower_rate']) else f'{r.lower_rate:.3f}%'}"
+                     f"{'' if not a_val else ' · A값 ' + won(a_val)}")
+            if pd.isna(r["lower_rate"]):
+                st.warning("하한율 정보가 없어 투찰금액을 계산할 수 없습니다. 공고문을 확인하세요.")
+                continue
+            hist = analysis.similar_history(raw, r, keywords)
+            rec = analysis.recommend(hist, top=3)
+            base_p = analysis.baseline_prob(hist)
+            if not rec:
+                st.caption("비교할 과거 데이터가 부족해 추천이 없습니다. (투찰 계산기에서 범위를 넓혀 보세요)")
+                continue
+            amts = [analysis.bid_amount(r["base_amt"], x["추천 사정율"], r["lower_rate"], a_val) for x in rec]
+            best = rec[0]
+            times = f" · 무작위의 {best['낙찰확률(%)'] / base_p:.1f}배" if base_p else ""
+            st.metric(f"🎯 추천 사정율 {best['추천 사정율']:.2f}%", f"{amts[0]:,}원")
+            st.caption(f"낙찰확률 {best['낙찰확률(%)']}%{times}")
+            if len(rec) > 1:
+                st.caption("다른 후보: " + " / ".join(
+                    f"{x['추천 사정율']:.2f}% → {a:,}원 ({x['낙찰확률(%)']}%)" for x, a in zip(rec[1:], amts[1:])))
+            same_org = (hist["org"] == r["org"]).all() if len(hist) else False
+            st.caption(f"비교: {'같은 기관' if same_org else '같은 업종·비슷한 금액'} 과거 {rec[0]['비교 공고 수']}건")
+            if r["bid_key"] in mine_map:
+                st.success(f"✓ 투찰 기록됨: {mine_map[r['bid_key']]:,.0f}원")
+            else:
+                pick = st.radio("기록할 사정율", [f"{x['추천 사정율']:.2f}" for x in rec], horizontal=True,
+                                key=f"pick_{r['bid_key']}", label_visibility="collapsed")
+                if st.button("📝 이 사정율로 투찰 기록", key=f"save_{r['bid_key']}"):
+                    s_ = float(pick)
+                    db.upsert_many("my_bids", [{"bid_key": r["bid_key"],
+                                                "amount": analysis.bid_amount(r["base_amt"], s_, r["lower_rate"], a_val),
+                                                "sajung": s_, "memo": "오늘의 투찰에서 저장", "my_rank": None,
+                                                "checked_at": None, "created_at": db.now()}])
+                    st.rerun()
+    if len(todo) > 40:
+        st.caption(f"마감이 가까운 40건만 표시했습니다. 전체는 '📋 공고 현황'에서 보세요. (총 {len(todo)}건)")
+
+    st.subheader("📊 최근 3일 개찰 결과")
+    if recent.empty:
+        st.caption("없음")
+    else:
+        st.dataframe(recent.sort_values("open_date", ascending=False)[
+            ["name", "org", "base_amt", "sajung", "first_company", "winner_sajung", "participants"]].rename(columns={
+                "name": "공고명", "org": "기관", "base_amt": "기초금액", "sajung": "실제 사정율",
+                "first_company": "1순위", "winner_sajung": "1순위 사정율", "participants": "참가수"}),
+            hide_index=True, use_container_width=True,
+            column_config={"기초금액": st.column_config.NumberColumn(format="%d"),
+                           "실제 사정율": st.column_config.NumberColumn(format="%.3f"),
+                           "1순위 사정율": st.column_config.NumberColumn(format="%.3f")})
+
 # ---------------- 공고 현황 ----------------
-if page == "📋 공고 현황":
+elif page == "📋 공고 현황":
     st.header("📋 공고 현황")
     need_data()
     c1, c2, c3, c4 = st.columns(4)

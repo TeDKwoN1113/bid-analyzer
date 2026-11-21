@@ -14,7 +14,7 @@ def load_dataset() -> pd.DataFrame:
     df = db.query_df(
         """
         SELECT b.bid_key, b.bid_no, b.bid_ord, b.name, b.org, b.demand_org, b.region,
-               b.main_type, b.method, b.contract_method, b.notice_dt, b.open_dt, b.est_price,
+               b.main_type, b.method, b.contract_method, b.notice_dt, b.close_dt, b.open_dt, b.est_price,
                b.lower_rate, b.url,
                ba.base_amt AS base_amt_notice, ba.a_value, ba.range_begin, ba.range_end,
                p.plan_price, p.base_amt AS base_amt_open,
@@ -266,6 +266,23 @@ def competitor_stats(ranks: pd.DataFrame, min_count: int = 2) -> pd.DataFrame:
     agg["최근 참가"] = agg["최근 참가"].dt.strftime("%Y-%m-%d")
     agg = agg[agg["참가"] >= min_count]
     return agg.sort_values(["1순위", "10위내", "참가"], ascending=False).round(3)
+
+
+def similar_history(df: pd.DataFrame, row, keywords=None) -> pd.DataFrame:
+    """추천 계산용 과거 공고: 같은 업종, 기초금액 ±50%, 같은 기관 데이터가 충분하면 기관 우선."""
+    h = apply_filters(df[df["sajung"].notna()], keywords=keywords)
+    base = row["base_amt"]
+    if pd.notna(base) and base > 0:
+        h = h[(h["base_amt"] >= base * 0.5) & (h["base_amt"] <= base * 1.5)]
+    same = h[h["org"] == row["org"]]
+    return same if len(win_windows(same)) >= 15 else h
+
+
+def baseline_prob(hist: pd.DataFrame) -> float | None:
+    """무작위로 넣었을 때 기대 낙찰확률 = 평균(1/참가업체수)."""
+    p = hist["participants"].dropna()
+    p = p[p > 0]
+    return float((1 / p).mean() * 100) if len(p) else None
 
 
 def my_bids_view(df: pd.DataFrame) -> pd.DataFrame:
