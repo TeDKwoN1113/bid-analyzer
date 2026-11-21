@@ -244,3 +244,46 @@ def company() -> dict:
         "region": get_kv("company_region", s["company_region"]),
         "licenses": [x.strip() for x in lic.split(",") if x.strip()] if lic else s["company_licenses"],
     }
+
+
+# ---------------- 저장 공간 관리 ----------------
+
+def size_mb() -> float | None:
+    try:
+        if engine().dialect.name == "sqlite":
+            return os.path.getsize(url().replace("sqlite:///", "")) / 1048576
+        return float(query_df("SELECT pg_database_size(current_database()) / 1048576.0 AS mb")["mb"].iloc[0])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def table_sizes() -> pd.DataFrame:
+    if engine().dialect.name == "sqlite":
+        rows = []
+        for t in TABLES:
+            n = int(query_df(f"SELECT COUNT(*) AS n FROM {t}")["n"].iloc[0])
+            rows.append({"테이블": t, "행 수": n, "MB": None})
+        return pd.DataFrame(rows)
+    return query_df(
+        """SELECT relname AS "테이블", n_live_tup AS "행 수",
+                  ROUND(pg_total_relation_size(relid) / 1048576.0, 1) AS "MB"
+           FROM pg_catalog.pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC""")
+
+
+def prune_prelim(keywords: list[str]) -> int:
+    """우리 업종이 아닌 공고의 '예비가격 15개 상세'를 삭제 (예정가격은 plans 에 남아 분석에 지장 없음)."""
+    if not keywords:
+        return 0
+    params, conds = {}, []
+    for i, k in enumerate(keywords):
+        params[f"k{i}"] = f"%{k}%"
+        conds.append(f"b.name LIKE :k{i} OR b.main_type LIKE :k{i}")
+    lic_conds = " OR ".join(f"l.license LIKE :k{i}" for i in range(len(keywords)))
+    sql = f"""DELETE FROM prelim_prices WHERE bid_key IN (
+                SELECT b.bid_key FROM bids b
+                WHERE NOT ({' OR '.join(conds)})
+                  AND NOT EXISTS (SELECT 1 FROM licenses l WHERE l.bid_key = b.bid_key AND ({lic_conds}))
+                  AND NOT EXISTS (SELECT 1 FROM my_bids m WHERE m.bid_key = b.bid_key))"""
+    with engine().begin() as c:
+        res = c.execute(text(sql), params)
+        return res.rowcount or 0

@@ -278,7 +278,29 @@ def auto(progress=print) -> dict:
     summary["우리 투찰"] = update_my_bids(progress)
     if progress:
         progress(f"개찰순위: 공고 {r['bids']}건 / 업체 {r['rows']:,}행 {r['stopped']}")
+    summary["저장 공간"] = maintenance(progress)
     return summary
+
+
+def maintenance(progress=None) -> str:
+    """저장 공간 정리·점검. 한도의 80%를 넘으면 알림."""
+    import analysis
+    s = load_settings()
+    removed = db.prune_prelim(analysis.company_keywords())
+    mb = db.size_mb()
+    msg = f"예비가격 상세 정리 {removed:,}행" + (f" · DB {mb:,.0f}MB / {s['db_limit_mb']}MB" if mb else "")
+    db.log("저장 공간", "-", removed, msg)
+    if mb and mb > s["db_limit_mb"] * 0.8:
+        try:
+            import notify
+            notify.send("🚨 입찰 분석기 저장 공간 경고",
+                        f"데이터베이스 용량이 {mb:,.0f}MB 로 한도({s['db_limit_mb']}MB)의 80%를 넘었습니다.\n"
+                        "Claude 에게 '저장 공간 정리'를 요청해 주세요.")
+        except Exception as e:  # noqa: BLE001
+            msg += f" (경고 전송 실패: {e})"
+    if progress:
+        progress(msg)
+    return msg
 
 
 def quick(progress=print) -> dict:

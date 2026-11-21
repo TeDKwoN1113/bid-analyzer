@@ -634,6 +634,17 @@ elif page == "⬇️ 데이터 수집":
         st.success("데이터는 **영구 저장 DB**에 저장됩니다. 매일 새벽 자동 수집도 이 DB에 쌓입니다.")
     else:
         st.warning("영구 저장 DB가 연결되지 않았습니다. 웹사이트에서는 서버가 재시작되면 데이터가 지워질 수 있습니다.")
+    mb = db.size_mb()
+    if mb is not None:
+        lim = settings["db_limit_mb"]
+        st.progress(min(mb / lim, 1.0), text=f"저장 공간: {mb:,.0f}MB / {lim}MB ({mb / lim * 100:.0f}%)")
+        with st.expander("테이블별 용량 · 정리"):
+            st.dataframe(db.table_sizes(), hide_index=True, use_container_width=True)
+            st.caption("자동 수집이 매일 우리 업종이 아닌 공고의 '예비가격 15개 상세'를 정리합니다. "
+                       "(예정가격·사정율은 남아서 분석에 지장 없음)")
+            if st.button("지금 정리하기"):
+                n = db.prune_prelim(analysis.company_keywords())
+                st.success(f"{n:,}행 정리했습니다.")
     st.subheader("과거 데이터 채우기 현황")
     st.dataframe(pd.DataFrame(collector.backfill_status()), hide_index=True, use_container_width=True)
     st.caption("자동 수집이 매일 최근 3일 + 과거 데이터를 조금씩 채웁니다. 목표 날수에 도달하면 1년치 분석이 가능합니다.")

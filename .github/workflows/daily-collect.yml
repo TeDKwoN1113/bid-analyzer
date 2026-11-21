@@ -40,3 +40,6 @@ jobs:
       - name: 알림 보내기
         if: always()
         run: python notify.py
+      - name: 실패 알림
+        if: failure()
+        run: python notify.py --alert "자동 수집 중 오류가 났습니다. 확인 주소 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

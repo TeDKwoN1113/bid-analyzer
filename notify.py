@@ -131,6 +131,22 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
     notice = pd.to_datetime(t["notice_dt"], errors="coerce", format="mixed")
     keys, parts = [], []
 
+    # 0) 오늘 마감인데 아직 투찰 기록이 없는 공고 → 투찰금액과 함께 다시 알림
+    close = pd.to_datetime(t["close_dt"], errors="coerce", format="mixed")
+    mine = set(db.query_df("SELECT bid_key FROM my_bids")["bid_key"])
+    dl = t[(close >= now) & (close <= now.normalize() + pd.Timedelta(days=1)) & t["base_amt_notice"].notna()]
+    dl = dl[~dl["bid_key"].isin(mine)]
+    dl = dl[~dl["bid_key"].map(lambda k: (k, "deadline") in done).astype(bool)]
+    if len(dl):
+        lines = [f"⏰ <b>오늘 투찰 마감 {len(dl)}건</b> (아직 기록 없음)"]
+        for _, r in dl.sort_values("close_dt").iterrows():
+            pk = analysis.pick_bid(df, r, analysis.bid_keywords(r))
+            amt = f"💰 <b>{pk['투찰금액']:,}원</b> (사정율 {pk['사정율']:.2f}%)" if pk else "투찰금액 계산 불가"
+            ct = pd.to_datetime(r["close_dt"], errors="coerce", format="mixed")
+            lines.append(f"• {_title(r)}\n  마감 {ct.strftime('%H:%M') if pd.notna(ct) else '-'} | {amt}")
+            keys.append((r["bid_key"], "deadline"))
+        parts.append("\n".join(lines))
+
     # 1) 새 공고 (최근 3일 내 공고, 아직 개찰 전)
     new = t[(t["open_date"] >= now) & (notice >= now - pd.Timedelta(days=3))]
     new = new[~new["bid_key"].map(lambda k: (k, "new") in done).astype(bool)].sort_values("open_date")
@@ -228,8 +244,11 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--test", action="store_true")
+    ap.add_argument("--alert", help="경고 메시지 바로 보내기 (자동 수집 실패 등)")
     a = ap.parse_args()
-    if a.test:
+    if a.alert:
+        print(send("🚨 입찰 분석기 경고", html.escape(a.alert)) or "채널 설정 없음")
+    elif a.test:
         print(send("⚡ 입찰 분석기 테스트", "알림 연결이 정상입니다 ✅") or "채널 설정 없음")
     else:
         print(run(a.dry_run))

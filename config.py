@@ -66,6 +66,8 @@ DEFAULT_SETTINGS = {
     # 자동 수집: 과거 몇 일치까지 채울지, 한 번 실행에 최대 몇 일씩 채울지
     "backfill_days": 365,
     "backfill_per_run": 60,
+    # 저장 공간 (Neon 무료 0.5GB). 80% 넘으면 경고
+    "db_limit_mb": 500,
     # 경쟁업체 분석용 개찰순위 자동 수집: 업종·지역 키워드에 맞는 공고만, 상위 N개 업체까지
     "rank_top_n": 100,
     "rank_max_bids_per_run": 300,
