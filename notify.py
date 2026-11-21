@@ -115,6 +115,14 @@ def _title(r) -> str:
     return f"<b>{name}</b>"
 
 
+DETAIL_MAX = 15  # 새 공고·개찰 결과는 한 번에 이만큼만 자세히 (나머지는 건수만)
+
+
+def _more(lines: list[str], n: int) -> None:
+    if n > DETAIL_MAX:
+        lines.append(f"… 외 {n - DETAIL_MAX}건은 사이트에서 확인")
+
+
 def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
     """보낼 메시지 본문과 (공고키, 종류) 목록."""
     s = load_settings()
@@ -164,7 +172,8 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
     new = new[~new["bid_key"].map(lambda k: (k, "new") in done).astype(bool)].sort_values("open_date")
     if len(new):
         lines = [f"🆕 <b>새 공고 {len(new)}건</b>"]
-        for _, r in new.iterrows():
+        keys += [(k, "new") for k in new["bid_key"].iloc[DETAIL_MAX:]]
+        for _, r in new.head(DETAIL_MAX).iterrows():
             amt = r["base_amt"] if pd.notna(r["base_amt"]) else r["est_price"]
             limit = r["allowed_regions"] or ("제한없음" if r["allowed_regions_known"] else _e(r["region"]))
             lines.append(f"• {_title(r)}\n  {_e(r['org'])} | 참가지역 {_e(limit)}\n"
@@ -172,6 +181,7 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
                          f"개찰 {_dt(r['open_dt'])} | {_e(r['contract_method'] or r['method'])}"
                          + (f"\n  📝 참가신청 마감 {_dt(r['qual_dt'])}" if pd.notna(pd.to_datetime(r.get('qual_dt'), errors='coerce', format='mixed')) else ""))
             keys.append((r["bid_key"], "new"))
+        _more(lines, len(new))
         parts.append("\n".join(lines))
 
     # 2) 기초금액 공개 → 추천 투찰금액
@@ -205,13 +215,16 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
     res = res[~res["bid_key"].map(lambda k: (k, "result") in done).astype(bool)].sort_values("open_date")
     if len(res):
         lines = [f"📊 <b>개찰 결과 {len(res)}건</b>"]
-        for _, r in res.iterrows():
+        res = res.iloc[::-1]  # 최근 개찰부터
+        keys += [(k, "result") for k in res["bid_key"].iloc[DETAIL_MAX:]]
+        for _, r in res.head(DETAIL_MAX).iterrows():
             sj = "-" if pd.isna(r["sajung"]) else f"{r['sajung']:.3f}%"
             wj = "-" if pd.isna(r["winner_sajung"]) else f"{r['winner_sajung']:.3f}%"
             pc = "-" if pd.isna(r["participants"]) else f"{int(r['participants'])}개사"
             lines.append(f"• {_title(r)}\n  1순위 {_e(r['first_company'])} {_won(r['first_amt'])}\n"
                          f"  실제 사정율 {sj} | 1순위 사정율 {wj} | 참가 {pc}")
             keys.append((r["bid_key"], "result"))
+        _more(lines, len(res))
         parts.append("\n".join(lines))
 
     # 4) 우리 투찰 결과
