@@ -765,6 +765,42 @@ elif page == "⚙️ 설정 · API 점검":
         db.set_kv("company_licenses", clic.strip())
         st.cache_data.clear()
         st.success("저장했습니다. (자동 수집·알림에도 적용됩니다)")
+    with st.expander("🧮 적격심사 한도 계산 도우미"):
+        st.caption("공고에 첨부된 적격심사 기준표의 값을 넣으면 '통과 가능한 최대 추정가격'을 계산합니다. "
+                   "구간·기관마다 기준이 다르니, 가장 자주 넣는 기관의 기준표로 계산하세요.")
+        def _f(k, d=0.0):
+            try:
+                return float(db.get_kv(k, d) or d)
+            except ValueError:
+                return d
+        q1, q2, q3 = st.columns(3)
+        perf = q1.number_input("최근 5년 동일업종 실적 합계(억원)", 0.0, 100000.0, _f("qual_perf"), 0.1)
+        mult = q2.number_input("시공경험 만점 배수 (기준표, 예: 1배)", 0.1, 10.0, _f("qual_mult", 1.0), 0.1)
+        mgmt = q3.number_input("경영상태 만점 가능한 최대 추정가격(억원, 모르면 0)", 0.0, 100000.0, _f("qual_mgmt"), 0.5)
+        single = st.checkbox("단일공종 공사라 시공경험 만점 처리되는 구간 (실적 계산 생략)",
+                             value=db.get_kv("qual_single", "0") == "1")
+        limits = []
+        if not single and perf > 0:
+            base_lim = perf / mult                      # 시공경험 만점이 되는 최대 기초금액
+            limits.append(("시공경험", base_lim / 1.1))  # 추정가격 ≈ 기초금액 ÷ 1.1
+            st.write(f"- 시공경험: 실적 {perf:,.1f}억 ÷ 배수 {mult:g} = 기초금액 **{base_lim:,.1f}억**까지 만점 "
+                     f"→ 추정가격 약 **{base_lim / 1.1:,.1f}억**")
+        if mgmt > 0:
+            limits.append(("경영상태", mgmt))
+            st.write(f"- 경영상태: 추정가격 **{mgmt:,.1f}억**까지 만점")
+        if limits:
+            lim = min(v for _, v in limits)
+            st.success(f"통과 가능 최대 추정가격 ≈ **{lim:,.1f}억원** (가장 작은 한도: "
+                       f"{min(limits, key=lambda x: x[1])[0]})")
+            if st.button("이 값으로 적용"):
+                db.set_kv("qual_max_est", f"{lim:.1f}")
+                for k, v in (("qual_perf", perf), ("qual_mult", mult), ("qual_mgmt", mgmt)):
+                    db.set_kv(k, str(v))
+                db.set_kv("qual_single", "1" if single else "0")
+                st.cache_data.clear()
+                st.success("적용했습니다. 이 금액을 넘는 공고에 경고가 붙습니다.")
+        else:
+            st.caption("실적 또는 경영상태 한도를 넣으면 계산됩니다.")
     st.subheader("분석 기본값")
     mx = st.number_input("기본 최대 금액(억원)", 1.0, 1000.0, settings["max_amount"] / 1e8)
     apw = st.text_input("접속 비밀번호 (외부/휴대폰 접속 시 꼭 설정)", settings.get("app_password", ""),

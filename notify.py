@@ -236,6 +236,63 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
     return "\n\n".join(parts + [footer]), keys
 
 
+def weekly_report(df: pd.DataFrame | None = None, days: int = 7) -> str:
+    """지난 N일 성적: 참가 가능 공고·투찰·결과, 누적 성적."""
+    df = analysis.load_dataset() if df is None else df
+    now = pd.Timestamp.now()
+    since = now - pd.Timedelta(days=days)
+    t = analysis.apply_filters(df, keywords=analysis.company_keywords(), eligible_only=True)
+    opened = t[(t["open_date"] >= since) & (t["open_date"] < now)]
+    mb = analysis.my_bids_view(df)
+    lines = [f"📈 <b>주간 성적 ({since:%m/%d}~{now:%m/%d})</b>"]
+    if mb.empty:
+        lines.append(f"참가 가능 공고 {len(opened)}건 개찰 · 우리 투찰 기록 0건")
+        lines.append("※ 투찰하신 공고는 사이트에서 '📝 투찰 기록'을 눌러 두면 결과가 자동으로 집계됩니다.")
+        return "\n".join(lines)
+    wk = mb[(mb["open_date"] >= since) & (mb["open_date"] < now)]
+    mine_nos = set(mb["bid_no"])
+    missed = opened[~opened["bid_no"].isin(mine_nos)]
+    lines.append(f"참가 가능 공고 {len(opened)}건 개찰 · 우리 투찰 {len(wk)}건 · 안 넣은 공고 {len(missed)}건")
+
+    def counts(x):
+        r = x["결과"]
+        return {"낙찰": int(r.str.contains("낙찰").sum() - r.str.contains("실패").sum()),
+                "1순위": int((r == "🏆 1순위").sum()), "하한 미달": int((r == "하한 미달").sum()),
+                "10위 이내": int(((x["my_rank"] > 1) & (x["my_rank"] <= 10)).sum())}
+    if len(wk):
+        c = counts(wk)
+        lines.append(f"이번 주 결과: 🏆 낙찰 {c['낙찰']} · 1순위 {c['1순위']} · 2~10위 {c['10위 이내']} · 하한 미달 {c['하한 미달']}")
+        gap = (wk["sajung"] - wk["sajung_bid"]).mean()
+        if pd.notna(gap):
+            lines.append(f"우리 사정율 − 실제 사정율 평균 {gap:+.3f}%p "
+                         + ("(평균보다 높게 넣는 편)" if gap > 0.1 else "(평균보다 낮게 넣는 편)" if gap < -0.1 else "(적정)"))
+    done = mb[~mb["결과"].isin(["개찰 전", "결과 대기"])]
+    if len(done):
+        c = counts(done)
+        lines.append(f"누적 {len(done)}건: 🏆 낙찰 {c['낙찰']} · 1순위 {c['1순위']} · 하한 미달 {c['하한 미달']}")
+    if len(missed) and len(opened):
+        lines.append(f"💡 참가 가능 공고의 {len(missed) / len(opened) * 100:.0f}%를 넣지 않았어요. "
+                     "낙찰 횟수는 넣은 공고 수에 비례합니다.")
+    return "\n".join(lines)
+
+
+def send_weekly_if_due() -> str:
+    from datetime import date, datetime
+    last = db.get_kv("weekly_report_date")
+    today = date.today()
+    if last:
+        try:
+            gap = (today - datetime.strptime(last, "%Y-%m-%d").date()).days
+        except ValueError:
+            gap = 99
+        if not (today.weekday() == 0 and gap >= 6 or gap >= 7):
+            return "주간 리포트: 아직 아님"
+    text = weekly_report()
+    sent = send("⚡ 입찰 분석기", text) if channels() else []
+    db.set_kv("weekly_report_date", today.isoformat())
+    return f"주간 리포트 {'전송' if sent else '작성(채널 없음)'}"
+
+
 def run(dry_run: bool = False) -> str:
     text, keys = build()
     if not text:
@@ -258,8 +315,11 @@ if __name__ == "__main__":
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--test", action="store_true")
     ap.add_argument("--alert", help="경고 메시지 바로 보내기 (자동 수집 실패 등)")
+    ap.add_argument("--weekly", action="store_true", help="주간 성적 리포트 미리보기")
     a = ap.parse_args()
-    if a.alert:
+    if a.weekly:
+        print(weekly_report())
+    elif a.alert:
         print(send("🚨 입찰 분석기 경고", html.escape(a.alert)) or "채널 설정 없음")
     elif a.test:
         print(send("⚡ 입찰 분석기 테스트", "알림 연결이 정상입니다 ✅") or "채널 설정 없음")

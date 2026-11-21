@@ -147,3 +147,9 @@ def test_qualification_deadline_reminder(df):
     db.execute("UPDATE bids SET qual_dt = :q WHERE bid_key = :k", {"q": soon, "k": k})
     text, keys = notify.build(analysis.load_dataset())
     assert (k, "qual") in keys and "참가신청 마감" in text
+
+
+def test_weekly_report(df):
+    db.use_sample(True)
+    text = notify.weekly_report(analysis.load_dataset(), days=60)
+    assert "주간 성적" in text

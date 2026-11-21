@@ -300,6 +300,11 @@ def auto(progress=print) -> dict:
             summary["추천 검증"] = tune.run(progress)
     except Exception as e:  # noqa: BLE001  (검증 실패가 수집 전체를 실패로 만들지 않게)
         db.log("추천 검증", "-", 0, f"오류: {e}")
+    try:
+        import notify
+        summary["주간 리포트"] = notify.send_weekly_if_due()
+    except Exception as e:  # noqa: BLE001
+        db.log("주간 리포트", "-", 0, f"오류: {e}")
     return summary
 
 
