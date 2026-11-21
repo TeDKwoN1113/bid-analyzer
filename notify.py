@@ -155,15 +155,13 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
             av = f" | A값 {_won(r['a_value'])}" if r["a_value"] else ""
             line = (f"• {_title(r)}\n  {_e(r['org'])} | 개찰 {_dt(r['open_dt'])}\n"
                     f"  기초금액 {_won(r['base_amt'])} | 하한율 {lr}{av}")
-            h = analysis.similar_history(df, r, kw)
-            rec = analysis.recommend(h, top=1)
-            if rec and pd.notna(r["lower_rate"]):
-                x = rec[0]
-                amt = analysis.bid_amount(r["base_amt"], x["추천 사정율"], r["lower_rate"], r["a_value"] or 0)
-                line += (f"\n  🎯 추천 사정율 <b>{x['추천 사정율']:.2f}%</b> → 투찰 <b>{amt:,}원</b>"
-                         f"\n     (과거 {x['비교 공고 수']}건 기준 낙찰확률 {x['낙찰확률(%)']}%)")
+            pk = analysis.pick_bid(df, r, kw)
+            if pk:
+                badge = {"높음": "🟢", "보통": "🟡", "낮음": "🔴"}[pk["신뢰도"]]
+                line += (f"\n  💰 투찰금액 <b>{pk['투찰금액']:,}원</b>"
+                         f"\n     사정율 {pk['사정율']:.2f}% · 신뢰도 {badge}{pk['신뢰도']}")
             else:
-                line += "\n  🎯 비교할 과거 데이터가 부족해 추천 없음"
+                line += "\n  💰 하한율 정보가 없어 금액 계산 불가 (공고문 확인)"
             lines.append(line)
             keys.append((r["bid_key"], "base"))
         parts.append("\n".join(lines))

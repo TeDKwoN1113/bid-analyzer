@@ -278,6 +278,53 @@ def similar_history(df: pd.DataFrame, row, keywords=None) -> pd.DataFrame:
     return same if len(win_windows(same)) >= 15 else h
 
 
+def pick_bid(df: pd.DataFrame, row, keywords=None) -> dict | None:
+    """공고 하나에 대한 최종 투찰금액 1개.
+
+    비교 범위를 단계적으로 넓혀(같은 기관 → 같은 업종·비슷한 금액 → 같은 업종 전체 → 전체)
+    항상 금액을 내되, 근거가 약하면 신뢰도를 낮게 표시한다.
+    """
+    base, lr = row["base_amt"], row["lower_rate"]
+    if pd.isna(base) or pd.isna(lr) or base <= 0:
+        return None
+    a_val = row["a_value"] or 0
+    done = df[df["sajung"].notna()]
+    tries = [("같은 기관", similar_history(df, row, keywords)),
+             ("같은 업종 전체", apply_filters(done, keywords=keywords)),
+             ("전체 공고", done)]
+    for basis, hist in tries:
+        n = len(win_windows(hist))
+        if n < 5:
+            continue
+        rec = recommend(hist, top=3)
+        if not rec:
+            continue
+        best = rec[0]
+        bp = baseline_prob(hist)
+        times = best["낙찰확률(%)"] / bp if bp else None
+        if basis.startswith("같은 기관") and (hist["org"] != row["org"]).any():
+            basis = "같은 업종·비슷한 금액"
+        if n >= 100 and (times or 0) >= 2:
+            conf = "높음"
+        elif n >= 30:
+            conf = "보통"
+        else:
+            conf = "낮음"
+        return {
+            "사정율": best["추천 사정율"],
+            "투찰금액": bid_amount(base, best["추천 사정율"], lr, a_val),
+            "신뢰도": conf, "비교 공고": n, "근거": basis,
+            "낙찰확률": best["낙찰확률(%)"], "무작위 대비": times,
+            "후보": [(x["추천 사정율"], bid_amount(base, x["추천 사정율"], lr, a_val), x["낙찰확률(%)"])
+                   for x in rec],
+        }
+    # 데이터가 거의 없을 때: 과거 사정율 중앙값(없으면 100%)
+    s_ = float(done["sajung"].median()) if len(done) else 100.0
+    return {"사정율": round(s_, 2), "투찰금액": bid_amount(base, s_, lr, a_val), "신뢰도": "낮음",
+            "비교 공고": len(done), "근거": "과거 사정율 중앙값", "낙찰확률": None, "무작위 대비": None,
+            "후보": []}
+
+
 def baseline_prob(hist: pd.DataFrame) -> float | None:
     """무작위로 넣었을 때 기대 낙찰확률 = 평균(1/참가업체수)."""
     p = hist["participants"].dropna()

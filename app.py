@@ -174,32 +174,27 @@ if page == "🏠 오늘의 투찰":
             if pd.isna(r["lower_rate"]):
                 st.warning("하한율 정보가 없어 투찰금액을 계산할 수 없습니다. 공고문을 확인하세요.")
                 continue
-            hist = analysis.similar_history(raw, r, keywords)
-            rec = analysis.recommend(hist, top=3)
-            base_p = analysis.baseline_prob(hist)
-            if not rec:
-                st.caption("비교할 과거 데이터가 부족해 추천이 없습니다. (투찰 계산기에서 범위를 넓혀 보세요)")
+            pk = analysis.pick_bid(raw, r, keywords)
+            if not pk:
+                st.caption("투찰금액을 계산할 수 없습니다.")
                 continue
-            amts = [analysis.bid_amount(r["base_amt"], x["추천 사정율"], r["lower_rate"], a_val) for x in rec]
-            best = rec[0]
-            times = f" · 무작위의 {best['낙찰확률(%)'] / base_p:.1f}배" if base_p else ""
-            st.metric(f"🎯 추천 사정율 {best['추천 사정율']:.2f}%", f"{amts[0]:,}원")
-            st.caption(f"낙찰확률 {best['낙찰확률(%)']}%{times}")
-            if len(rec) > 1:
-                st.caption("다른 후보: " + " / ".join(
-                    f"{x['추천 사정율']:.2f}% → {a:,}원 ({x['낙찰확률(%)']}%)" for x, a in zip(rec[1:], amts[1:])))
-            same_org = (hist["org"] == r["org"]).all() if len(hist) else False
-            st.caption(f"비교: {'같은 기관' if same_org else '같은 업종·비슷한 금액'} 과거 {rec[0]['비교 공고 수']}건")
+            badge = {"높음": "🟢", "보통": "🟡", "낮음": "🔴"}[pk["신뢰도"]]
+            st.metric("💰 투찰금액", f"{pk['투찰금액']:,}원")
+            st.caption(f"사정율 {pk['사정율']:.2f}% · 신뢰도 {badge} {pk['신뢰도']}")
+            with st.expander("근거 보기"):
+                st.write(f"- 비교 대상: {pk['근거']} 과거 {pk['비교 공고']}건")
+                if pk["낙찰확률"] is not None:
+                    tm = f" (무작위로 넣을 때의 {pk['무작위 대비']:.1f}배)" if pk["무작위 대비"] else ""
+                    st.write(f"- 이 사정율의 과거 낙찰확률: {pk['낙찰확률']}%{tm}")
+                for s_, a_, p_ in pk["후보"][1:]:
+                    st.write(f"- 다른 후보: {s_:.2f}% → {a_:,}원 (낙찰확률 {p_}%)")
+                st.caption("신뢰도: 비교 공고 100건 이상 + 무작위의 2배 이상 = 높음, 30건 이상 = 보통")
             if r["bid_key"] in mine_map:
                 st.success(f"✓ 투찰 기록됨: {mine_map[r['bid_key']]:,.0f}원")
             else:
-                pick = st.radio("기록할 사정율", [f"{x['추천 사정율']:.2f}" for x in rec], horizontal=True,
-                                key=f"pick_{r['bid_key']}", label_visibility="collapsed")
-                if st.button("📝 이 사정율로 투찰 기록", key=f"save_{r['bid_key']}"):
-                    s_ = float(pick)
-                    db.upsert_many("my_bids", [{"bid_key": r["bid_key"],
-                                                "amount": analysis.bid_amount(r["base_amt"], s_, r["lower_rate"], a_val),
-                                                "sajung": s_, "memo": "오늘의 투찰에서 저장", "my_rank": None,
+                if st.button("📝 이 금액으로 투찰 기록", key=f"save_{r['bid_key']}"):
+                    db.upsert_many("my_bids", [{"bid_key": r["bid_key"], "amount": pk["투찰금액"],
+                                                "sajung": pk["사정율"], "memo": "오늘의 투찰에서 저장", "my_rank": None,
                                                 "checked_at": None, "created_at": db.now()}])
                     st.rerun()
     if len(todo) > 40:
