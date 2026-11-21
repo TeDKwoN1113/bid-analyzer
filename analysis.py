@@ -15,7 +15,7 @@ def load_dataset() -> pd.DataFrame:
         """
         SELECT b.bid_key, b.bid_no, b.bid_ord, b.name, b.org, b.demand_org, b.region,
                b.main_type, b.method, b.contract_method, b.notice_dt, b.close_dt, b.open_dt, b.est_price,
-               b.lower_rate, b.url,
+               b.lower_rate, b.url, b.spec_docs,
                ba.base_amt AS base_amt_notice, ba.a_value, ba.range_begin, ba.range_end,
                ba.a_apply, ba.pure_cost, ba.a_detail,
                p.plan_price, p.base_amt AS base_amt_open,
@@ -423,7 +423,25 @@ def min_sajung_for_amount(base, lr, a_val, amount) -> float:
     return s_
 
 
-def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True) -> dict | None:
+# 추천 방식 (자동 검증 결과에 따라 바뀜, 기본 = 단계별 혼합)
+STRATEGIES = {
+    "blend": "① 현재 방식 (기관+울산+전국)",
+    "blend_noregion": "② 울산 단계 없이 (기관+전국)",
+    "national": "③ 전국 같은 업종만",
+    "region_only": "④ 울산 지역제한 공고만",
+    "mean_sajung": "⑤ 단순 평균 (사정율 평균)",
+    "mean_winner": "⑥ 과거 1순위 사정율 평균",
+}
+LABEL_TO_MODE = {v: k for k, v in STRATEGIES.items()}
+
+
+def current_strategy() -> str:
+    m = db.get_kv("strategy", "blend") or "blend"
+    return m if m in STRATEGIES else "blend"
+
+
+def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True,
+             mode: str | None = None) -> dict | None:
     """공고 하나에 대한 최종 투찰금액 1개와 근거.
 
     단계별로 섞어서 낙찰확률 계산: 전국 같은 업종 → (우리 지역 지역제한 공고) → (같은 기관)
@@ -444,7 +462,20 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True) -> d
         return {"사정율": round(s_, 2), "투찰금액": bid_amount(base, s_, lr, a_val), "신뢰도": "낮음",
                 "근거": "과거 사정율 중앙값(데이터 부족)", "낙찰확률": None, "무작위 대비": None, "후보": [],
                 "단계": [], "근거상세": evidence(done, round(s_, 2))}
+    mode = mode or current_strategy()
+    reg_tiers = [t for t in tl if "지역제한" in t[0]]
+    if mode == "blend_noregion":
+        tl = [t for t in tl if "지역제한" not in t[0]]
+    elif mode == "national":
+        tl = tl[:1]
+    elif mode == "region_only" and reg_tiers and len(win_windows(reg_tiers[0][1])) >= 5:
+        tl = reg_tiers
     curve, weights = blend(tl)
+    fixed_s = None
+    if mode == "mean_sajung":
+        fixed_s = round(float(tl[0][1]["sajung"].mean()), 2)
+    elif mode == "mean_winner" and tl[0][1]["winner_sajung"].notna().any():
+        fixed_s = round(float(tl[0][1]["winner_sajung"].mean()), 2)
     floor_amt = pure_cost_min(row)
     floor_s = min_sajung_for_amount(base, lr, a_val, floor_amt) if floor_amt else None
     if floor_s is not None:
@@ -454,6 +485,10 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True) -> d
     if not picks:
         picks = [{"사정율": floor_s or 100.0, "낙찰확률": 0.0, "하한통과확률": 0.0}]
     s_ = round(picks[0]["사정율"], 2)
+    if fixed_s is not None:
+        s_ = fixed_s
+        hit = curve.iloc[(curve["사정율"] - s_).abs().argsort()[:1]]
+        picks = [{"사정율": s_, "낙찰확률": float(hit["낙찰확률"].iloc[0]), "하한통과확률": 0.0}] + picks
     if floor_s is not None and s_ < floor_s:
         s_ = floor_s
     steps = [{"이름": name, "비중": w, **evidence(h, s_)} for (name, h), w in zip(tl, weights)]
@@ -482,6 +517,7 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True) -> d
                for x in picks],
         "단계": steps, "근거상세": steps[-1],
         "순공사원가 하한": floor_amt, "순공사원가 사정율": floor_s,
+        "방식": STRATEGIES[mode],
     }
 
 
@@ -498,6 +534,8 @@ def evidence_lines(pk: dict) -> list[str]:
         out.append(f"비교 대상: 과거 공고 {e['n']}건 (데이터 부족)")
     if pk.get("무작위 대비"):
         out.append(f"과거 낙찰확률 {pk['낙찰확률']}% = 아무렇게나 넣을 때의 {pk['무작위 대비']:.1f}배")
+    if pk.get("방식") and pk["방식"] != STRATEGIES["blend"]:
+        out.append(f"추천 방식: {pk['방식']} (자동 검증에서 성적이 가장 좋았던 방식)")
     if pk.get("1순위 낙찰률") is not None:
         out.append(f"비슷한 공고에서 개찰 1순위가 그대로 낙찰된 비율 {pk['1순위 낙찰률']:.0f}% "
                    "(나머지는 1순위 심사 탈락 → 다음 순위 낙찰, 계산에 반영됨)")
@@ -644,12 +682,12 @@ def strategy_picks(hist: pd.DataFrame, row, keywords) -> dict:
 
 
 def backtest(df: pd.DataFrame, keywords, test_days: int = 90, max_tests: int = 300,
-             min_history: int = 50, progress=None) -> tuple[pd.DataFrame, pd.DataFrame]:
+             min_history: int = 50, progress=None, eligible_only: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
     """최근 test_days 일 동안의 공고 각각에 대해, 그 공고 '이전' 데이터만으로 사정율을 골랐다면
     실제로 1순위였는지 확인. (미래 데이터를 쓰지 않는 공정한 시험)"""
     done = df[df["sajung"].notna() & df["winner_sajung"].notna() & df["open_date"].notna()]
     done = done[done["winner_sajung"] >= done["sajung"]].sort_values("open_date")
-    tests = apply_filters(done, keywords=keywords)
+    tests = apply_filters(done, keywords=keywords, eligible_only=eligible_only)
     tests = tests[tests["open_date"] >= pd.Timestamp.now() - pd.Timedelta(days=test_days)]
     if len(tests) > max_tests:
         tests = tests.sample(max_tests, random_state=0).sort_values("open_date")
@@ -704,3 +742,32 @@ def backtest(df: pd.DataFrame, keywords, test_days: int = 90, max_tests: int = 3
     sort_cols = ["10위 이내", "1순위"] if "10위 이내" in summary else ["1순위", "무작위 대비(배)"]
     summary = summary.reset_index().sort_values(sort_cols, ascending=False)
     return summary, detail
+
+
+
+def data_health(df: pd.DataFrame, days: int = 30) -> pd.DataFrame:
+    """최근 N일 개찰 공고 기준 데이터 연결 상태 (문제 진단용)."""
+    if df.empty:
+        return pd.DataFrame()
+    now = pd.Timestamp.now()
+    d = df[(df["open_date"] < now) & (df["open_date"] >= now - pd.Timedelta(days=days))]
+    if d.empty:
+        return pd.DataFrame()
+    kw = company_keywords()
+    mine = apply_filters(d, keywords=kw, eligible_only=True)
+    rk = set(db.query_df("SELECT DISTINCT bid_key FROM ranks")["bid_key"])
+
+    def pct(x, sub):
+        return f"{x.sum() / len(sub) * 100:.0f}%" if len(sub) else "-"
+    rows = []
+    for label, sub in (("전체 공사 공고", d), ("우리 참가 가능 공고", mine)):
+        rows.append({
+            "구분": label, "공고 수": len(sub),
+            "기초금액": pct(sub["base_amt"].notna(), sub),
+            "예정가격(사정율)": pct(sub["sajung"].notna(), sub),
+            "개찰결과(1순위)": pct(sub["first_amt"].notna(), sub),
+            "최종 낙찰자": pct(sub["win_amt"].notna(), sub),
+            "참가지역 확인": pct(sub["allowed_regions_known"], sub),
+            "개찰순위(경쟁업체)": pct(sub["bid_key"].isin(rk), sub),
+        })
+    return pd.DataFrame(rows)

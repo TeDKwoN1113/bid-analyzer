@@ -67,7 +67,18 @@ def map_bid(r: dict) -> list[tuple[str, dict]]:
         "est_price": num(g(r, "presmptPrce")),
         "lower_rate": num(g(r, "sucsfbidLwltRate")),
         "url": g(r, "bidNtceDtlUrl", "bidNtceUrl"),
+        "spec_docs": _spec_docs(r),
     })]
+
+
+def _spec_docs(r: dict) -> str | None:
+    """공고문 첨부파일 [(파일명, 주소), ...] (JSON)."""
+    docs = []
+    for i in range(1, 11):
+        u, n = r.get(f"ntceSpecDocUrl{i}"), r.get(f"ntceSpecFileNm{i}")
+        if u:
+            docs.append([n or f"첨부{i}", u])
+    return json.dumps(docs, ensure_ascii=False) if docs else None
 
 
 def _is_cnstwk(r: dict) -> bool:
@@ -279,6 +290,13 @@ def auto(progress=print) -> dict:
     if progress:
         progress(f"개찰순위: 공고 {r['bids']}건 / 업체 {r['rows']:,}행 {r['stopped']}")
     summary["저장 공간"] = maintenance(progress)
+    # 매주 월요일(또는 7일 넘게 안 했으면) 추천 방식 자동 검증
+    try:
+        import tune
+        if tune.due():
+            summary["추천 검증"] = tune.run(progress)
+    except Exception as e:  # noqa: BLE001  (검증 실패가 수집 전체를 실패로 만들지 않게)
+        db.log("추천 검증", "-", 0, f"오류: {e}")
     return summary
 
 

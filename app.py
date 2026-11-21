@@ -31,7 +31,7 @@ def _reload_changed_modules():
     """
     first = "_init" not in _STAMPS
     changed = first
-    for name in ("config", "db", "api_client", "analysis", "collector", "sample_data", "notify"):
+    for name in ("config", "db", "api_client", "analysis", "collector", "sample_data", "notify", "tune"):
         m = sys.modules.get(name)
         if m is None or not getattr(m, "__file__", None):
             continue
@@ -227,6 +227,15 @@ if page == "🏠 오늘의 투찰":
             st.caption(f"{r['org']} · 참가지역 {limit} · 투찰마감 "
                        f"{'-' if pd.isna(r['close_date']) else r['close_date'].strftime('%m/%d %H:%M')} · "
                        f"개찰 {r['open_date'].strftime('%m/%d %H:%M')} · {r['contract_method'] or r['method'] or ''}")
+            docs = []
+            if isinstance(r.get("spec_docs"), str):
+                try:
+                    import json as _json
+                    docs = _json.loads(r["spec_docs"])
+                except ValueError:
+                    docs = []
+            if docs:
+                st.markdown("📎 공고문: " + " · ".join(f"[{n[:24]}]({u})" for n, u in docs[:4]))
             if pd.isna(r["base_amt_notice"]):
                 st.write(f"추정가격 {won(r['est_price'])} · 기초금액 **미공개** (공개되면 텔레그램으로 알려드립니다)")
                 continue
@@ -587,6 +596,28 @@ elif page == "🔬 추천 검증":
         "지난 공고 하나하나에 대해 **그 공고 이전 데이터만으로** 사정율을 골랐다면 실제로 어땠는지 시험합니다. "
         "미래 데이터를 쓰지 않으므로, 실제로 이 방식대로 넣었을 때의 성적과 같습니다.")
     need_data()
+    import json as _json
+    cur = analysis.current_strategy()
+    st.info(f"현재 투찰금액 계산 방식: **{analysis.STRATEGIES[cur]}**  \n"
+            "매주 월요일 새벽 자동으로 검증해서, 확실히 더 좋은 방식이 있으면 바꿉니다. (텔레그램으로 결과 알림)")
+    ev = db.get_kv("strategy_eval")
+    if ev:
+        try:
+            e = _json.loads(ev)
+            st.caption(f"마지막 자동 검증 {e['date']}: {e['reason']}")
+            if e.get("summary"):
+                with st.expander("마지막 자동 검증 결과"):
+                    st.dataframe(pd.DataFrame(e["summary"]), hide_index=True, use_container_width=True)
+        except (ValueError, KeyError):
+            pass
+    with st.expander("방식 직접 바꾸기"):
+        pick_mode = st.selectbox("투찰금액 계산 방식", list(analysis.STRATEGIES),
+                                 index=list(analysis.STRATEGIES).index(cur),
+                                 format_func=lambda m: analysis.STRATEGIES[m])
+        if st.button("이 방식으로 저장"):
+            db.set_kv("strategy", pick_mode)
+            st.cache_data.clear()
+            st.success("저장했습니다. 오늘의 투찰·알림에 바로 적용됩니다.")
     c1, c2 = st.columns(2)
     days_bt = c1.selectbox("시험 기간", [30, 60, 90, 180], index=2, format_func=lambda d: f"최근 {d}일")
     n_bt = c2.selectbox("최대 시험 공고 수", [100, 200, 300, 500], index=1)
@@ -645,6 +676,14 @@ elif page == "⬇️ 데이터 수집":
             if st.button("지금 정리하기"):
                 n = db.prune_prelim(analysis.company_keywords())
                 st.success(f"{n:,}행 정리했습니다.")
+    st.subheader("🩺 데이터 점검 (최근 30일 개찰 공고)")
+    hd = analysis.data_health(analysis.load_dataset())
+    if hd.empty:
+        st.caption("최근 30일 개찰 공고가 아직 없습니다.")
+    else:
+        st.dataframe(hd, hide_index=True, use_container_width=True)
+        st.caption("각 정보가 연결된 공고 비율입니다. 기초금액·예정가격·개찰결과가 80% 이상이면 정상이며, "
+                   "낮으면 이 표를 캡처해서 보내주세요. (최종 낙찰자는 적격심사 후 며칠 뒤에 채워집니다)")
     st.subheader("과거 데이터 채우기 현황")
     st.dataframe(pd.DataFrame(collector.backfill_status()), hide_index=True, use_container_width=True)
     st.caption("자동 수집이 매일 최근 3일 + 과거 데이터를 조금씩 채웁니다. 목표 날수에 도달하면 1년치 분석이 가능합니다.")
