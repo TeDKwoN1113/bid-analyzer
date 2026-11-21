@@ -70,14 +70,23 @@ def map_bid(r: dict) -> list[tuple[str, dict]]:
     })]
 
 
+def _is_cnstwk(r: dict) -> bool:
+    """참가지역·면허제한 API는 물품·용역도 섞여 오므로 공사만 저장."""
+    div = g(r, "bsnsDivNm", default="공사")
+    return "공사" in str(div)
+
+
 def map_region(r: dict):
     name = g(r, "prtcptPsblRgnNm", "rgnNm", "prtcptLmtRgnNm")
-    return [("regions", {"bid_key": key_of(r), "region": name})] if name else []
+    return [("regions", {"bid_key": key_of(r), "region": name})] if name and _is_cnstwk(r) else []
 
 
 def map_license(r: dict):
+    # 면허명 + 허용업종 목록(이 중 하나만 있어도 참가 가능)
     name = g(r, "lcnsLmtNm", "indstrytyNm", "lcnsNm")
-    return [("licenses", {"bid_key": key_of(r), "license": name})] if name else []
+    extra = g(r, "permsnIndstrytyList", default="")
+    text = " ".join(x for x in (name, extra) if x)
+    return [("licenses", {"bid_key": key_of(r), "license": text[:2000]})] if text and _is_cnstwk(r) else []
 
 
 A_VALUE_FIELDS = [  # A값 구성 항목(보험료 등) - 응답에 있는 것만 합산
