@@ -82,41 +82,75 @@ def bid_amount(base_amt: float, sajung: float, lower_rate: float, a_value: float
     return int(math.ceil((plan - a_value) * lower_rate / 100 + a_value))
 
 
+def win_windows(hist: pd.DataFrame) -> pd.DataFrame:
+    """과거 공고별 '낙찰 구간' [실제 사정율, 1순위 사정율).
+
+    내 투찰 사정율 s 가 이 구간 안에 있었다면:
+      - s ≥ 실제 사정율 → 투찰금액이 하한 이상(유효)
+      - s < 1순위 사정율 → 실제 1순위보다 낮은 금액 → 내가 1순위
+    """
+    h = hist.dropna(subset=["sajung", "winner_sajung"])
+    h = h[h["winner_sajung"] >= h["sajung"]]  # 데이터 오류 제거
+    return h[["bid_key", "sajung", "winner_sajung"]]
+
+
+def win_curve(hist: pd.DataFrame, lo: float = 98.0, hi: float = 102.0, step: float = 0.01) -> pd.DataFrame:
+    """사정율별 과거 낙찰확률·하한통과확률."""
+    w = win_windows(hist)
+    grid = np.round(np.arange(lo, hi + 1e-9, step), 4)
+    if w.empty:
+        return pd.DataFrame({"사정율": grid, "낙찰확률": np.nan, "낙찰확률(원값)": np.nan,
+                             "하한통과확률": np.nan, "표본": 0})
+    a = w["sajung"].values[None, :]
+    b = w["winner_sajung"].values[None, :]
+    g = grid[:, None]
+    win = ((g >= a) & (g < b)).mean(axis=1) * 100
+    valid = (g >= a).mean(axis=1) * 100
+    # 한 공고의 낙찰 구간은 매우 좁아서 그래프가 들쭉날쭉함 → ±0.05%p 범위 평균으로 평활화
+    k = max(1, int(round(0.05 / step)))
+    smooth = pd.Series(win).rolling(2 * k + 1, center=True, min_periods=1).mean().values
+    return pd.DataFrame({"사정율": grid, "낙찰확률": smooth.round(2), "낙찰확률(원값)": win.round(2),
+                         "하한통과확률": valid.round(1), "표본": len(w)})
+
+
+def best_points(curve: pd.DataFrame, top: int = 3, min_gap: float = 0.15) -> list[dict]:
+    """낙찰확률이 높은 사정율 상위 N개 (서로 min_gap 이상 떨어진 지점)."""
+    if curve.empty or curve["낙찰확률"].isna().all() or curve["낙찰확률"].max() <= 0:
+        return []
+    order = curve["낙찰확률"].sort_values(ascending=False).index
+    picked = []
+    for i in order:
+        s = curve.at[i, "사정율"]
+        if all(abs(s - curve.at[j, "사정율"]) >= min_gap for j in picked):
+            picked.append(i)
+        if len(picked) >= top:
+            break
+    return [{"사정율": float(curve.at[i, "사정율"]), "낙찰확률": float(curve.at[i, "낙찰확률"]),
+             "하한통과확률": float(curve.at[i, "하한통과확률"])} for i in picked]
+
+
 def sajung_table(hist: pd.DataFrame, base_amt: float, lower_rate: float, a_value: float = 0,
-                 lo: float = 98.0, hi: float = 102.0, step: float = 0.1) -> pd.DataFrame:
-    """사정율 후보별 투찰금액과 과거 통계."""
-    actual = hist["sajung"].dropna().values
-    winners = hist["winner_sajung"].dropna().values
-    rows = []
-    for s in np.round(np.arange(lo, hi + 1e-9, step), 3):
-        valid = (actual >= s).mean() * 100 if len(actual) else np.nan
-        near = ((winners >= s - step / 2) & (winners < s + step / 2)).sum() if len(winners) else 0
-        rows.append({
-            "사정율(%)": s,
-            "투찰금액(원)": bid_amount(base_amt, s, lower_rate, a_value),
-            "하한 통과확률(%)": round(valid, 1) if not np.isnan(valid) else None,
-            "과거 1순위 빈도(건)": int(near),
-        })
-    return pd.DataFrame(rows)
+                 lo: float = 98.0, hi: float = 102.0, step: float = 0.05) -> pd.DataFrame:
+    """사정율 후보별 투찰금액과 과거 낙찰확률."""
+    c = win_curve(hist, lo, hi, 0.01)
+    c = c[np.isclose((c["사정율"] / step).round() * step, c["사정율"])].reset_index(drop=True)
+    return pd.DataFrame({
+        "사정율(%)": c["사정율"],
+        "투찰금액(원)": [bid_amount(base_amt, s, lower_rate, a_value) for s in c["사정율"]],
+        "낙찰확률(%)": c["낙찰확률"],
+        "하한 통과확률(%)": c["하한통과확률"],
+    })
 
 
-def recommend(hist: pd.DataFrame, step: float = 0.1, top: int = 3) -> list[dict]:
-    """과거 1순위 사정율이 가장 많이 몰린 구간 추천."""
-    w = hist["winner_sajung"].dropna()
+def recommend(hist: pd.DataFrame, top: int = 3) -> list[dict]:
+    """과거 데이터 기준 낙찰확률이 가장 높은 사정율."""
+    w = win_windows(hist)
     if len(w) < 5:
         return []
-    bins = (np.floor(w / step) * step).round(3)
-    vc = bins.value_counts().head(top)
-    actual = hist["sajung"].dropna()
     out = []
-    for b, cnt in vc.items():
-        out.append({
-            "구간": f"{b:.1f} ~ {b + step:.1f}%",
-            "1순위 건수": int(cnt),
-            "비율(%)": round(cnt / len(w) * 100, 1),
-            "하한 통과확률(%)": float(round((actual >= b).mean() * 100, 1)) if len(actual) else None,
-            "추천 사정율": float(round(b + step / 2, 3)),
-        })
+    for p in best_points(win_curve(hist), top):
+        out.append({"추천 사정율": round(p["사정율"], 3), "낙찰확률(%)": round(p["낙찰확률"], 1),
+                    "하한 통과확률(%)": round(p["하한통과확률"], 1), "비교 공고 수": len(w)})
     return out
 
 
@@ -153,23 +187,47 @@ def prelim_position_stats(bid_keys) -> pd.DataFrame:
     return df
 
 
-def competitor_stats(min_count: int = 2) -> pd.DataFrame:
-    """개찰순위 데이터가 있는 공고들에서 업체별 투찰 경향."""
+def load_ranks(bid_keys=None) -> pd.DataFrame:
+    """개찰순위(업체별 투찰) + 각 업체가 노린 사정율."""
     df = db.query_df(
-        """SELECT k.company, k.bizno, k.rank, k.amount, k.rate, ba.base_amt, b.lower_rate
+        """SELECT k.bid_key, k.rank, k.bizno, k.company, k.amount, k.rate, k.note,
+                  b.name, b.org, b.open_dt, b.lower_rate,
+                  COALESCE(p.base_amt, ba.base_amt) AS base_amt, ba.a_value, p.plan_price
            FROM ranks k JOIN bids b ON b.bid_key = k.bid_key
-           LEFT JOIN base_amounts ba ON ba.bid_key = k.bid_key""")
+           LEFT JOIN base_amounts ba ON ba.bid_key = k.bid_key
+           LEFT JOIN plans p ON p.bid_key = k.bid_key
+           WHERE k.rank > 0""")
     if df.empty:
         return df
-    df["투찰사정율"] = df["amount"] / (df["lower_rate"] / 100) / df["base_amt"] * 100
-    agg = df.groupby("company").agg(**{
-        "참가횟수": ("rank", "count"),
-        "1순위횟수": ("rank", lambda x: int((x == 1).sum())),
-        "평균투찰률": ("rate", "mean"),
-        "평균투찰사정율": ("투찰사정율", "mean"),
-        "사정율편차": ("투찰사정율", "std"),
-    }).reset_index().rename(columns={"company": "업체명"})
-    return agg[agg["참가횟수"] >= min_count].sort_values("참가횟수", ascending=False).round(3)
+    if bid_keys is not None:
+        df = df[df["bid_key"].isin(set(bid_keys))]
+    a = df["a_value"].fillna(0)
+    r = df["lower_rate"] / 100
+    # 업체가 노린 사정율 = 투찰금액을 하한율로 역산한 예정가격 / 기초금액
+    df["투찰사정율"] = ((df["amount"] - a) / r + a) / df["base_amt"] * 100
+    df.loc[(df["투찰사정율"] < 90) | (df["투찰사정율"] > 110), "투찰사정율"] = np.nan
+    df["open_date"] = pd.to_datetime(df["open_dt"], errors="coerce", format="mixed")
+    return df
+
+
+def competitor_stats(ranks: pd.DataFrame, min_count: int = 2) -> pd.DataFrame:
+    """업체별 투찰 경향."""
+    if ranks.empty:
+        return pd.DataFrame()
+    key = ranks["bizno"].where(ranks["bizno"].fillna("") != "", ranks["company"])
+    agg = ranks.assign(_k=key).groupby("_k").agg(**{
+        "업체명": ("company", "last"),
+        "사업자번호": ("bizno", "last"),
+        "참가": ("bid_key", "nunique"),
+        "1순위": ("rank", lambda x: int((x == 1).sum())),
+        "10위내": ("rank", lambda x: int((x <= 10).sum())),
+        "평균 투찰사정율": ("투찰사정율", "mean"),
+        "사정율 편차": ("투찰사정율", "std"),
+        "최근 참가": ("open_date", "max"),
+    }).reset_index(drop=True)
+    agg["최근 참가"] = agg["최근 참가"].dt.strftime("%Y-%m-%d")
+    agg = agg[agg["참가"] >= min_count]
+    return agg.sort_values(["1순위", "10위내", "참가"], ascending=False).round(3)
 
 
 def default_keywords():

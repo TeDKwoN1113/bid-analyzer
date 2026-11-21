@@ -235,20 +235,80 @@ def auto(progress=print) -> dict:
         summary[label] = res
         if progress:
             progress(f"{label}: {res['count']:,}건, {msg}")
+    r = collect_ranks_auto()
+    summary["개찰순위"] = r
+    if progress:
+        progress(f"개찰순위: 공고 {r['bids']}건 / 업체 {r['rows']:,}행 {r['stopped']}")
     return summary
 
 
-def collect_ranks(bid_no: str, bid_ord: str = "000") -> int:
-    """특정 공고의 개찰순위(업체별 투찰금액) 수집."""
+def collect_ranks(bid_no: str, bid_ord: str = "000", top_n: int | None = None) -> int:
+    """특정 공고의 개찰순위(업체별 투찰금액) 수집. top_n 이 있으면 상위 N개 업체만."""
     s = load_settings()
     params = {"bidNtceNo": bid_no, "bidNtceOrd": bid_ord}
     div = s["inqry_div_bidno"].get("ranks")
     if div:
         params["inqryDiv"] = div
-    items = api_client.call_all("ranks", params)
+    if top_n:
+        items, _ = api_client.call("ranks", params, page=1, rows=top_n)
+    else:
+        items = api_client.call_all("ranks", params)
     key = f"{bid_no}-{bid_ord}"
-    db.upsert_many("ranks", [map_rank(key, r) for r in items])
-    return len(items)
+    rows = [map_rank(key, r) for r in items]
+    if top_n:
+        rows = sorted((r for r in rows if r["rank"] > 0), key=lambda r: r["rank"])[:top_n]
+    # 순위 정보가 없는 공고(유찰 등)도 다시 조회하지 않도록 빈 표시를 남김
+    db.upsert_many("ranks", rows or [{"bid_key": key, "rank": 0, "bizno": "", "company": None,
+                                      "amount": None, "rate": None, "note": "순위없음"}])
+    return len(rows)
+
+
+def pending_rank_bids(limit: int) -> list[tuple[str, str]]:
+    """개찰순위를 아직 안 받은 관심 공고 (업종·지역 키워드, 최신순)."""
+    s = load_settings()
+    since = (date.today() - timedelta(days=s["rank_lookback_days"])).isoformat()
+    df = db.query_df(
+        """SELECT b.bid_no, b.bid_ord, b.name, b.main_type, b.region, b.org, b.demand_org, o.open_dt
+           FROM openings o JOIN bids b ON b.bid_key = o.bid_key
+           WHERE o.participants > 0 AND o.open_dt >= :since
+             AND NOT EXISTS (SELECT 1 FROM ranks k WHERE k.bid_key = o.bid_key)
+           ORDER BY o.open_dt DESC""", {"since": since})
+    if df.empty:
+        return []
+    text = df["name"].fillna("") + " " + df["main_type"].fillna("")
+    m = text.str.contains("|".join(s["target_keywords"]) or ".", regex=True)
+    if s["default_regions"]:
+        place = df["region"].fillna("") + " " + df["org"].fillna("") + " " + df["demand_org"].fillna("")
+        m &= place.str.contains("|".join(s["default_regions"]), regex=True)
+    df = df[m].head(limit)
+    return list(zip(df["bid_no"], df["bid_ord"]))
+
+
+def collect_ranks_auto(progress=None) -> dict:
+    s = load_settings()
+    todo = pending_rank_bids(s["rank_max_bids_per_run"])
+    n, rows, stopped, errs = 0, 0, "", []
+    for i, (no, ord_) in enumerate(todo):
+        if progress:
+            progress(f"개찰순위 {no} ({i + 1}/{len(todo)})", (i + 1) / max(1, len(todo)))
+        try:
+            rows += collect_ranks(no, ord_ or "000", s["rank_top_n"])
+            n += 1
+        except api_client.QuotaError as e:
+            stopped = f"오늘 호출 한도 초과 → 내일 이어서 ({e})"
+            break
+        except api_client.KeyError_ as e:
+            stopped = str(e)
+            break
+        except api_client.ApiError as e:
+            errs.append(f"{no}: {e}")
+    msg = f"관심 공고 {n}/{len(todo)}건"
+    if stopped:
+        msg += " / " + stopped
+    if errs:
+        msg += " / 오류: " + "; ".join(errs[:3])
+    db.log("개찰순위(자동)", "-", rows, msg)
+    return {"bids": n, "rows": rows, "todo": len(todo), "stopped": stopped, "errors": errs}
 
 
 def backfill_status() -> list[dict]:

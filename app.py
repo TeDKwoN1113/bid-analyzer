@@ -83,6 +83,39 @@ def need_data():
         st.stop()
 
 
+def win_chart(hist: pd.DataFrame, my_s: float | None = None, recs=None):
+    """사정율별 과거 낙찰확률 차트."""
+    c = analysis.win_curve(hist)
+    fig = go.Figure()
+    fig.add_scatter(x=c["사정율"], y=c["낙찰확률(원값)"], name="원값", line=dict(color="#c9d6ea", width=1),
+                    hoverinfo="skip")
+    fig.add_scatter(x=c["사정율"], y=c["낙찰확률"], name="낙찰확률(%, ±0.05 평균)", fill="tozeroy",
+                    line=dict(color="#1f6feb", width=2.5))
+    fig.add_scatter(x=c["사정율"], y=c["하한통과확률"], name="하한 통과확률(%)", yaxis="y2",
+                    line=dict(color="#9aa4b2", dash="dot"))
+    for r in recs or []:
+        fig.add_vline(x=r["추천 사정율"], line_color="#2da44e", line_width=1)
+    if my_s is not None:
+        fig.add_vline(x=my_s, line_dash="dash", line_color="#cf222e", annotation_text="내 사정율")
+    fig.update_layout(xaxis_title="투찰 사정율(%)", yaxis=dict(title="낙찰확률(%)", rangemode="tozero"),
+                      yaxis2=dict(title="하한 통과확률(%)", overlaying="y", side="right", range=[0, 100]),
+                      height=420, legend=dict(orientation="h", y=1.12), margin=dict(t=40))
+    st.plotly_chart(fig, use_container_width=True)
+    return c
+
+
+def random_baseline(hist: pd.DataFrame) -> float | None:
+    """무작위로 넣었을 때 기대 낙찰확률 = 평균(1/참가업체수)."""
+    p = hist["participants"].dropna()
+    p = p[p > 0]
+    return float((1 / p).mean() * 100) if len(p) else None
+
+
+WIN_HELP = ("낙찰확률: 과거 비슷한 공고들에 이 사정율로 넣었다면 1순위였을 비율. "
+            "(그 공고의 실제 사정율 이상이고, 실제 1순위가 노린 사정율보다 낮아야 1순위) "
+            "※ 과거 통계이며 낙찰을 보장하지 않습니다. 적격심사 통과는 별도입니다.")
+
+
 # ---------------- 공고 현황 ----------------
 if page == "📋 공고 현황":
     st.header("📋 공고 현황")
@@ -148,13 +181,17 @@ elif page == "📊 사정율 분석":
                       legend=dict(orientation="h", y=1.1))
     st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("추천 구간 (과거 1순위가 가장 많이 나온 사정율)")
+    st.subheader("🎯 사정율별 낙찰확률 (과거 공고 재현)")
     rec = analysis.recommend(d)
     if rec:
+        base_p = random_baseline(d)
         st.dataframe(pd.DataFrame(rec), hide_index=True, use_container_width=True)
-        st.caption("※ 과거 통계일 뿐, 예정가격은 추첨으로 정해지므로 낙찰을 보장하지 않습니다.")
+        if base_p:
+            st.caption(f"참고: 아무 사정율이나 넣었을 때 기대 낙찰확률(1/참가업체수 평균) ≈ {base_p:.2f}%")
     else:
-        st.info("1순위 데이터가 5건 이상 있어야 추천합니다.")
+        st.info("1순위 데이터가 있는 공고가 5건 이상 있어야 계산합니다.")
+    win_chart(d, recs=rec)
+    st.caption(WIN_HELP)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -211,25 +248,29 @@ elif page == "🧮 투찰 계산기":
         st.warning("비교 데이터가 10건 미만이라 통계가 불안정합니다. 범위를 넓혀보세요.")
 
     rec = analysis.recommend(hist)
+    base_p = random_baseline(hist)
     if rec:
-        best = rec[0]["추천 사정율"]
-        st.success(f"과거 1순위가 가장 많이 몰린 구간: **{rec[0]['구간']}** → "
-                   f"이 사정율({best}%)로 투찰하면 **{analysis.bid_amount(base, best, lr, a_val):,}원**")
+        st.markdown("#### 🎯 추천 사정율 (과거 낙찰확률 기준)")
+        cols = st.columns(len(rec))
+        for col, r in zip(cols, rec):
+            times = f" · 무작위의 {r['낙찰확률(%)'] / base_p:.1f}배" if base_p else ""
+            col.metric(f"사정율 {r['추천 사정율']:.2f}%",
+                       f"{analysis.bid_amount(base, r['추천 사정율'], lr, a_val):,}원")
+            col.caption(f"낙찰확률 **{r['낙찰확률(%)']}%**{times}")
+    elif len(hist):
+        st.info("1순위 데이터가 있는 비교 공고가 5건 이상 있어야 추천합니다. 범위를 넓혀보세요.")
 
-    my_s = st.number_input("내가 정한 사정율(%)", 95.0, 105.0, 100.0, 0.01, format="%.3f")
-    st.metric("투찰금액", f"{analysis.bid_amount(base, my_s, lr, a_val):,}원")
+    default_s = rec[0]["추천 사정율"] if rec else 100.0
+    my_s = st.number_input("내가 정한 사정율(%)", 95.0, 105.0, float(default_s), 0.01, format="%.3f")
+    curve = analysis.win_curve(hist, round(my_s, 2) - 0.1, round(my_s, 2) + 0.1, 0.01)
+    my_p = curve["낙찰확률"].iloc[len(curve) // 2] if len(curve) else None
+    m1, m2 = st.columns(2)
+    m1.metric("투찰금액", f"{analysis.bid_amount(base, my_s, lr, a_val):,}원")
+    m2.metric("이 사정율의 과거 낙찰확률", "-" if my_p is None or pd.isna(my_p) else f"{my_p:.2f}%")
 
+    win_chart(hist, my_s, rec)
+    st.caption(WIN_HELP)
     tbl = analysis.sajung_table(hist, base, lr, a_val)
-    fig = go.Figure()
-    fig.add_bar(x=tbl["사정율(%)"], y=tbl["과거 1순위 빈도(건)"], name="과거 1순위 빈도")
-    fig.add_scatter(x=tbl["사정율(%)"], y=tbl["하한 통과확률(%)"], name="하한 통과확률(%)", yaxis="y2")
-    fig.add_vline(x=my_s, line_dash="dash", annotation_text="내 사정율")
-    fig.update_layout(yaxis=dict(title="건수"), yaxis2=dict(title="%", overlaying="y", side="right",
-                                                          range=[0, 100]),
-                      height=420, legend=dict(orientation="h", y=1.1))
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("하한 통과확률: 과거 예정가격 기준으로, 이 사정율로 썼다면 하한율 미달(탈락)이 아니었을 비율. "
-               "낮은 사정율일수록 통과확률이 높지만 1순위가 되기는 어려워집니다.")
     st.dataframe(tbl, hide_index=True, use_container_width=True, height=300,
                  column_config={"투찰금액(원)": st.column_config.NumberColumn(format="%d")})
 
@@ -237,15 +278,47 @@ elif page == "🧮 투찰 계산기":
 elif page == "🏢 경쟁업체":
     st.header("🏢 경쟁업체 투찰 경향")
     need_data()
-    st.caption("개찰순위(업체별 투찰금액)를 수집한 공고만 분석됩니다. '데이터 수집' 메뉴에서 공고별로 받을 수 있습니다.")
-    cs = analysis.competitor_stats()
-    if cs.empty:
-        st.info("개찰순위 데이터가 없습니다.")
-    else:
-        name = st.text_input("업체명 검색")
-        if name:
-            cs = cs[cs["업체명"].str.contains(name, regex=False)]
-        st.dataframe(cs, hide_index=True, use_container_width=True)
+    st.caption("관심 공고(설정의 업종·지역 키워드)의 개찰순위 상위 업체를 매일 자동 수집해 분석합니다. "
+               "왼쪽 필터(업종·지역·금액·기간)가 적용됩니다.")
+    ranks = analysis.load_ranks(df["bid_key"])
+    if ranks.empty:
+        st.info("아직 개찰순위 데이터가 없습니다. 자동 수집이 돌면 채워지고, '데이터 수집' 메뉴에서 바로 받을 수도 있습니다.")
+        st.stop()
+    c1, c2, c3 = st.columns(3)
+    c1.metric("분석 공고", f"{ranks['bid_key'].nunique():,}건")
+    c2.metric("등장 업체", f"{ranks['company'].nunique():,}곳")
+    c3.metric("평균 투찰사정율(상위권)", f"{ranks['투찰사정율'].mean():.3f}%")
+
+    min_cnt = st.slider("최소 참가 횟수", 1, 20, 2)
+    cs = analysis.competitor_stats(ranks, min_cnt)
+    name = st.text_input("업체명 검색")
+    if name:
+        cs = cs[cs["업체명"].fillna("").str.contains(name, regex=False)]
+    st.dataframe(cs, hide_index=True, use_container_width=True, height=400,
+                 column_config={"평균 투찰사정율": st.column_config.NumberColumn(format="%.3f"),
+                                "사정율 편차": st.column_config.NumberColumn(format="%.3f")})
+    st.caption("투찰사정율 = 업체가 써낸 금액을 하한율로 역산한 사정율(그 업체가 노린 사정율). "
+               "편차가 작은 업체는 늘 비슷한 사정율로 넣는 '패턴형' 업체입니다.")
+
+    if not cs.empty:
+        st.subheader("업체별 투찰 사정율 분포")
+        pick = st.selectbox("업체 선택", cs["업체명"].dropna().tolist())
+        one = ranks[ranks["company"] == pick]
+        fig = go.Figure()
+        fig.add_histogram(x=ranks["투찰사정율"], xbins=dict(size=0.05), name="전체 상위권",
+                          histnorm="percent", opacity=0.45)
+        fig.add_histogram(x=one["투찰사정율"], xbins=dict(size=0.05), name=pick,
+                          histnorm="percent", opacity=0.75)
+        fig.update_layout(barmode="overlay", xaxis_title="투찰 사정율(%)", yaxis_title="비율(%)",
+                          height=380, legend=dict(orientation="h", y=1.12))
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(one.sort_values("open_date", ascending=False)[
+            ["open_dt", "name", "org", "rank", "amount", "투찰사정율"]].rename(columns={
+                "open_dt": "개찰일시", "name": "공고명", "org": "기관", "rank": "순위",
+                "amount": "투찰금액", "투찰사정율": "투찰사정율(%)"}),
+            hide_index=True, use_container_width=True,
+            column_config={"투찰금액": st.column_config.NumberColumn(format="%d"),
+                           "투찰사정율(%)": st.column_config.NumberColumn(format="%.3f")})
 
 # ---------------- 데이터 수집 ----------------
 elif page == "⬇️ 데이터 수집":
@@ -285,6 +358,15 @@ elif page == "⬇️ 데이터 수집":
                 st.success(f"{label}: {v['count']:,}건 저장")
 
     st.markdown("---")
+    st.subheader("관심 공고 개찰순위 한꺼번에 받기")
+    st.caption("설정의 업종·지역 키워드에 맞고 아직 순위를 안 받은 공고를 최신순으로 받습니다. (매일 자동 수집에도 포함)")
+    if st.button("관심 공고 개찰순위 받기"):
+        bar2 = st.progress(0.0)
+        r = collector.collect_ranks_auto(progress=lambda t, p: bar2.progress(min(p, 1.0), text=t))
+        st.cache_data.clear()
+        (st.warning if r["stopped"] or r["errors"] else st.success)(
+            f"공고 {r['bids']}/{r['todo']}건, 업체 {r['rows']:,}행 저장 {r['stopped']}")
+
     st.subheader("공고별 개찰순위(업체별 투찰금액) 받기")
     bn = st.text_input("공고번호 (예: R26BK01234567)")
     bo = st.text_input("차수", "000")

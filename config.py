@@ -60,6 +60,10 @@ DEFAULT_SETTINGS = {
     # 자동 수집: 과거 몇 일치까지 채울지, 한 번 실행에 최대 몇 일씩 채울지
     "backfill_days": 365,
     "backfill_per_run": 60,
+    # 경쟁업체 분석용 개찰순위 자동 수집: 업종·지역 키워드에 맞는 공고만, 상위 N개 업체까지
+    "rank_top_n": 100,
+    "rank_max_bids_per_run": 300,
+    "rank_lookback_days": 365,
     # 분석 대상 업종 키워드 (공고명/주공종명에 포함되면 대상). 나중에 '통신', '소방' 등 추가.
     "target_keywords": ["전기"],
     # 기본 필터
