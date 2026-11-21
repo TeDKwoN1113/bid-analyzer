@@ -7,12 +7,44 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+import importlib
+import sys
+import types
+
 import analysis
 import api_client
 import collector
+import config
 import db
 import sample_data
-from config import OPERATIONS, SAMPLE_DB_PATH, load_settings, save_settings
+
+
+# 서버 프로세스가 살아 있는 동안 유지되는 저장소 (app.py 는 매번 새로 실행되므로 sys.modules 에 둠)
+_STAMPS = sys.modules.setdefault("_bid_stamps", types.ModuleType("_bid_stamps")).__dict__.setdefault("v", {})
+
+
+def _reload_changed_modules():
+    """코드가 업데이트되면 다른 .py 파일도 다시 읽음.
+
+    서버는 app.py 만 매번 새로 읽고 다른 .py 는 처음 읽은 것을 계속 쓰기 때문에,
+    업데이트 후 '없는 함수' 오류가 날 수 있다. 처음 한 번은 전부, 이후에는 바뀐 것부터 의존 순서대로 다시 읽음.
+    """
+    first = "_init" not in _STAMPS
+    changed = first
+    for name in ("config", "db", "api_client", "analysis", "collector", "sample_data", "notify"):
+        m = sys.modules.get(name)
+        if m is None or not getattr(m, "__file__", None):
+            continue
+        mt = os.path.getmtime(m.__file__)
+        if changed or _STAMPS.get(name, mt) != mt:
+            importlib.reload(m)
+            changed = True
+        _STAMPS[name] = mt
+    _STAMPS["_init"] = True
+
+
+_reload_changed_modules()
+from config import OPERATIONS, SAMPLE_DB_PATH, load_settings, save_settings  # noqa: E402
 
 st.set_page_config(page_title="입찰 분석기", page_icon="⚡", layout="wide")
 
