@@ -50,7 +50,11 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("필터")
 kw = st.sidebar.text_input("업종 키워드(쉼표 구분)", ", ".join(settings["target_keywords"]))
 keywords = [k.strip() for k in kw.split(",") if k.strip()]
-rg = st.sidebar.text_input("지역/기관 키워드(비우면 전국)", ", ".join(settings["default_regions"]))
+only_ok = st.sidebar.checkbox(
+    f"우리가 참가 가능한 공고만 ({settings['company_region']} 업체 · {', '.join(settings['company_licenses'])})",
+    value=True, help="참가가능지역에 우리 지역이 있거나 지역제한이 없는 공고, 우리 면허로 넣을 수 있는 공고만 봅니다.")
+rg = st.sidebar.text_input("지역/기관 키워드(비우면 전체)", ", ".join(settings["default_regions"]),
+                           help="공사현장 지역·기관명으로 더 좁힐 때 사용 (예: 울산)")
 regions = [r.strip() for r in rg.split(",") if r.strip()]
 amt_range = st.sidebar.slider("기초금액 (억원)", 0.0, 100.0,
                               (0.0, settings["max_amount"] / 1e8), step=0.5)
@@ -69,6 +73,7 @@ df = analysis.apply_filters(
     raw, keywords=keywords, regions=regions,
     min_amt=amt_range[0] * 1e8 or None, max_amt=amt_range[1] * 1e8,
     date_from=(date.today() - timedelta(days=days)) if days else None,
+    eligible_only=only_ok,
 )
 
 
@@ -131,8 +136,10 @@ if page == "📋 공고 현황":
     now = pd.Timestamp.now()
     upcoming = view[view["plan_price"].isna() & (view["open_date"] >= now)].sort_values("open_date")
     st.subheader(f"개찰 전 공고 ({len(upcoming)}건)")
-    st.dataframe(upcoming[["bid_key", "name", "org", "region", "base_amt", "lower_rate", "open_dt", "url"]]
-                 .rename(columns={"bid_key": "공고번호", "name": "공고명", "org": "공고기관", "region": "지역",
+    up = upcoming.assign(참가지역=upcoming["allowed_regions"].where(upcoming["allowed_regions"] != "",
+                                                              upcoming["allowed_regions_known"].map({True: "제한없음", False: "확인중"})))
+    st.dataframe(up[["bid_key", "name", "org", "참가지역", "licenses", "base_amt", "lower_rate", "open_dt", "url"]]
+                 .rename(columns={"bid_key": "공고번호", "name": "공고명", "org": "공고기관", "licenses": "면허제한",
                                   "base_amt": "기초금액", "lower_rate": "하한율", "open_dt": "개찰일시",
                                   "url": "링크"}),
                  use_container_width=True, hide_index=True,
@@ -387,7 +394,10 @@ elif page == "⚙️ 설정 · API 점검":
     st.header("⚙️ 설정")
     key = st.text_input("공공데이터포털 인증키 (Decoding 키 권장)", settings["service_key"], type="password")
     kws = st.text_input("기본 업종 키워드", ", ".join(settings["target_keywords"]))
-    rgs = st.text_input("기본 지역 키워드", ", ".join(settings["default_regions"]))
+    rgs = st.text_input("기본 지역 키워드 (비우면 참가 가능한 공고 전체)", ", ".join(settings["default_regions"]))
+    creg = st.text_input("우리 회사 소재지 (참가가능지역 판단)", settings["company_region"])
+    clic = st.text_input("우리 회사 보유 면허 (쉼표 구분, 예: 전기공사업, 정보통신공사업)",
+                         ", ".join(settings["company_licenses"]))
     mx = st.number_input("기본 최대 금액(억원)", 1.0, 1000.0, settings["max_amount"] / 1e8)
     apw = st.text_input("접속 비밀번호 (외부/휴대폰 접속 시 꼭 설정)", settings.get("app_password", ""),
                         type="password")
@@ -396,6 +406,8 @@ elif page == "⚙️ 설정 · API 점검":
         settings["service_key"] = key.strip()
         settings["target_keywords"] = [k.strip() for k in kws.split(",") if k.strip()]
         settings["default_regions"] = [r.strip() for r in rgs.split(",") if r.strip()]
+        settings["company_region"] = creg.strip()
+        settings["company_licenses"] = [x.strip() for x in clic.split(",") if x.strip()]
         settings["max_amount"] = int(mx * 1e8)
         save_settings(settings)
         st.success("저장했습니다. 사이드바의 '샘플 데이터로 보기'를 끄면 실제 데이터를 씁니다.")
@@ -446,7 +458,8 @@ elif page == "⚙️ 설정 · API 점검":
     st.header("🔌 API 점검")
     st.caption("API가 정상 응답하는지, 어떤 항목(필드)이 오는지 확인합니다. 문제가 생기면 이 화면 결과를 캡처해 주세요.")
     op = st.selectbox("API 종류", list(OPERATIONS.keys()),
-                      format_func=lambda k: {"bid_list": "입찰공고", "base_amount": "기초금액", "openings": "개찰결과",
+                      format_func=lambda k: {"bid_list": "입찰공고", "regions": "참가가능지역", "licenses": "면허제한",
+                                             "base_amount": "기초금액", "openings": "개찰결과",
                                              "winners": "낙찰자", "prelim_prices": "예비가격 상세",
                                              "ranks": "개찰순위"}[k])
     c1, c2, c3 = st.columns(3)

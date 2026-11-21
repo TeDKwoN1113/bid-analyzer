@@ -26,6 +26,10 @@ OPERATIONS = {
     "bid_list": f"{BID_SERVICE}/getBidPblancListInfoCnstwk",
     # 입찰공고 기초금액 (공사)
     "base_amount": f"{BID_SERVICE}/getBidPblancListInfoCnstwkBsisAmount",
+    # 입찰공고 참가가능지역 (지역제한)
+    "regions": f"{BID_SERVICE}/getBidPblancListInfoPrtcptPsblRgn",
+    # 입찰공고 면허제한 (업종제한)
+    "licenses": f"{BID_SERVICE}/getBidPblancListInfoLicenseLimit",
     # 개찰결과 목록 (공사) - 개찰 직후 참가업체수, 1순위 업체
     "openings": f"{SCSBID_SERVICE}/getOpengResultListInfoCnstwk",
     # 낙찰자 목록 (공사) - 적격심사 후 최종 낙찰자
@@ -44,6 +48,8 @@ DEFAULT_SETTINGS = {
     # 날짜로 조회할 때의 inqryDiv 값 (서비스마다 의미가 다름, 'API 점검' 화면에서 확인 가능)
     "inqry_div_date": {
         "bid_list": "1",
+        "regions": "1",
+        "licenses": "1",
         "base_amount": "1",
         "openings": "1",
         "winners": "1",
@@ -78,8 +84,11 @@ DEFAULT_SETTINGS = {
     "notify_max_amount": 0,
     # 분석 대상 업종 키워드 (공고명/주공종명에 포함되면 대상). 나중에 '통신', '소방' 등 추가.
     "target_keywords": ["전기"],
-    # 기본 필터
-    "default_regions": ["울산"],
+    # 우리 회사: 소재지(참가가능지역 판단)와 보유 면허(업종제한 판단)
+    "company_region": "울산",
+    "company_licenses": ["전기공사업"],
+    # 기본 필터 (지역 키워드: 비우면 '참가 가능한 공고' 전체)
+    "default_regions": [],
     "max_amount": 4_000_000_000,   # 40억
 }
 

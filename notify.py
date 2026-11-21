@@ -134,7 +134,7 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
     df = analysis.load_dataset() if df is None else df
     if df.empty:
         return "", []
-    t = analysis.apply_filters(df, keywords=kw, regions=rg, max_amt=mx)
+    t = analysis.apply_filters(df, keywords=kw, regions=rg, max_amt=mx, eligible_only=True)
     sent = db.query_df("SELECT bid_key, kind FROM notified")
     done = set(zip(sent["bid_key"], sent["kind"]))
     now = pd.Timestamp.now()
@@ -148,7 +148,8 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
         lines = [f"🆕 <b>새 공고 {len(new)}건</b>"]
         for _, r in new.iterrows():
             amt = r["base_amt"] if pd.notna(r["base_amt"]) else r["est_price"]
-            lines.append(f"• {_title(r)}\n  {_e(r['org'])} | {_e(r['region'])}\n"
+            limit = r["allowed_regions"] or ("제한없음" if r["allowed_regions_known"] else _e(r["region"]))
+            lines.append(f"• {_title(r)}\n  {_e(r['org'])} | 참가지역 {_e(limit)}\n"
                          f"  {'기초' if pd.notna(r['base_amt']) else '추정'} {_won(amt)} | "
                          f"개찰 {_dt(r['open_dt'])} | {_e(r['contract_method'] or r['method'])}")
             keys.append((r["bid_key"], "new"))

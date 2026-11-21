@@ -1,5 +1,6 @@
 """분석 로직: 사정율, 1순위 사정율, 투찰금액 계산."""
 import math
+import re
 
 import numpy as np
 import pandas as pd
@@ -28,6 +29,15 @@ def load_dataset() -> pd.DataFrame:
     )
     if df.empty:
         return df
+    # 참가가능지역·면허제한 (공고별로 여러 개 → 쉼표로 묶음)
+    for table, col in (("regions", "region"), ("licenses", "license")):
+        t = db.query_df(f"SELECT bid_key, {col} FROM {table}")
+        joined = t.groupby("bid_key")[col].agg(lambda x: ", ".join(sorted(set(x)))) if len(t) else pd.Series(dtype=str)
+        out = "allowed_regions" if table == "regions" else "licenses"
+        df[out] = df["bid_key"].map(joined).fillna("")
+        # 그 공고 등록일의 데이터를 받았으면 '확인됨' (빈 값 = 제한 없음)
+        days = db.done_days(table)
+        df[out + "_known"] = df["notice_dt"].astype(str).str[:10].isin(days) | (df[out] != "")
     df["base_amt"] = df["base_amt_open"].fillna(df["base_amt_notice"])
     df["a_value"] = df["a_value"].fillna(0)
     df["participants"] = df["participants_open"].where(df["participants_open"] > 0,
@@ -48,14 +58,42 @@ def load_dataset() -> pd.DataFrame:
     return df
 
 
+def eligible(df: pd.DataFrame, company_region: str | None = None,
+             company_licenses: list[str] | None = None) -> pd.Series:
+    """우리 회사가 참가 가능한 공고인지.
+
+    - 지역: 참가가능지역이 없으면(전국) 가능, 있으면 우리 지역이 포함돼야 가능.
+      아직 지역 정보를 못 받은 공고는 공사지역·기관명에 우리 지역이 있으면 가능으로 봄.
+    - 면허: 면허제한이 확인되고 값이 있으면 우리 면허가 포함돼야 가능.
+    """
+    s = load_settings()
+    reg = company_region if company_region is not None else s["company_region"]
+    lic = company_licenses if company_licenses is not None else s["company_licenses"]
+    ok = pd.Series(True, index=df.index)
+    if reg and "allowed_regions" in df:
+        known = df["allowed_regions_known"]
+        allowed = df["allowed_regions"]
+        place = df["region"].fillna("") + " " + df["org"].fillna("") + " " + df["demand_org"].fillna("")
+        ok &= (known & ((allowed == "") | allowed.str.contains(reg, regex=False))) | \
+              (~known & place.str.contains(reg, regex=False))
+    if lic and "licenses" in df:
+        has = df["licenses"] != ""
+        ok &= ~has | df["licenses"].str.contains("|".join(map(re.escape, lic)), regex=True)
+    return ok
+
+
 def apply_filters(df: pd.DataFrame, keywords=None, regions=None, orgs=None,
                   min_amt=None, max_amt=None, date_from=None, date_to=None,
-                  name_query=None) -> pd.DataFrame:
+                  name_query=None, eligible_only: bool = False) -> pd.DataFrame:
     if df.empty:
         return df
     m = pd.Series(True, index=df.index)
+    if eligible_only:
+        m &= eligible(df)
     if keywords:
         text = df["name"].fillna("") + " " + df["main_type"].fillna("")
+        if "licenses" in df:
+            text = text + " " + df["licenses"]
         m &= text.str.contains("|".join(keywords), regex=True)
     if regions:
         text = df["region"].fillna("") + " " + df["org"].fillna("") + " " + df["demand_org"].fillna("")

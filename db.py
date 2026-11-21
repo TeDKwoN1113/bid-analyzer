@@ -23,6 +23,14 @@ TABLES = {
         notice_dt TEXT, close_dt TEXT, open_dt TEXT,
         est_price DOUBLE PRECISION, lower_rate DOUBLE PRECISION, url TEXT
     """, ["bid_key"]),
+    # 참가가능지역 (없으면 지역제한 없음)
+    "regions": ("""
+        bid_key TEXT, region TEXT
+    """, ["bid_key", "region"]),
+    # 면허(업종) 제한
+    "licenses": ("""
+        bid_key TEXT, license TEXT
+    """, ["bid_key", "license"]),
     "base_amounts": ("""
         bid_key TEXT, base_amt DOUBLE PRECISION,
         range_begin DOUBLE PRECISION, range_end DOUBLE PRECISION, a_value DOUBLE PRECISION

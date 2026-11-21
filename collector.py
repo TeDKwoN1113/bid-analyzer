@@ -70,6 +70,16 @@ def map_bid(r: dict) -> list[tuple[str, dict]]:
     })]
 
 
+def map_region(r: dict):
+    name = g(r, "prtcptPsblRgnNm", "rgnNm", "prtcptLmtRgnNm")
+    return [("regions", {"bid_key": key_of(r), "region": name})] if name else []
+
+
+def map_license(r: dict):
+    name = g(r, "lcnsLmtNm", "indstrytyNm", "lcnsNm")
+    return [("licenses", {"bid_key": key_of(r), "license": name})] if name else []
+
+
 A_VALUE_FIELDS = [  # A값 구성 항목(보험료 등) - 응답에 있는 것만 합산
     "npnInsrprm", "mrfnHealthInsrprm", "rtrfundNon", "odsnLngtrmrcprInsrprm",
     "sftyMngcst", "sftyChckMngcst", "qltyMngcst", "usefulAmt",
@@ -150,6 +160,8 @@ def map_rank(bid_key: str, r: dict) -> dict:
 # (API 이름, 변환함수, 화면 표시 이름)
 JOBS = [
     ("bid_list", map_bid, "입찰공고"),
+    ("regions", map_region, "참가지역"),
+    ("licenses", map_license, "면허제한"),
     ("base_amount", map_base, "기초금액"),
     ("openings", map_opening, "개찰결과"),
     ("prelim_prices", map_prelim, "예비가격"),
@@ -247,7 +259,7 @@ def quick(progress=print) -> dict:
     today = date.today()
     days = [today - timedelta(days=1), today]
     summary = {}
-    for op in ("bid_list", "base_amount", "openings"):
+    for op in ("bid_list", "regions", "licenses", "base_amount", "openings"):
         res = collect_days(op, days)
         summary[LABEL[op]] = res
         if progress:
@@ -282,20 +294,15 @@ def pending_rank_bids(limit: int) -> list[tuple[str, str]]:
     """개찰순위를 아직 안 받은 관심 공고 (업종·지역 키워드, 최신순)."""
     s = load_settings()
     since = (date.today() - timedelta(days=s["rank_lookback_days"])).isoformat()
-    df = db.query_df(
-        """SELECT b.bid_no, b.bid_ord, b.name, b.main_type, b.region, b.org, b.demand_org, o.open_dt
-           FROM openings o JOIN bids b ON b.bid_key = o.bid_key
-           WHERE o.participants > 0 AND o.open_dt >= :since
-             AND NOT EXISTS (SELECT 1 FROM ranks k WHERE k.bid_key = o.bid_key)
-           ORDER BY o.open_dt DESC""", {"since": since})
+    import analysis  # 순환 import 방지
+    df = analysis.load_dataset()
     if df.empty:
         return []
-    text = df["name"].fillna("") + " " + df["main_type"].fillna("")
-    m = text.str.contains("|".join(s["target_keywords"]) or ".", regex=True)
-    if s["default_regions"]:
-        place = df["region"].fillna("") + " " + df["org"].fillna("") + " " + df["demand_org"].fillna("")
-        m &= place.str.contains("|".join(s["default_regions"]), regex=True)
-    df = df[m].head(limit)
+    done = set(db.query_df("SELECT DISTINCT bid_key FROM ranks")["bid_key"])
+    df = df[(df["participants"] > 0) & (df["open_dt"].astype(str) >= since) & ~df["bid_key"].isin(done)]
+    df = analysis.apply_filters(df, keywords=s["target_keywords"], regions=s["default_regions"],
+                                eligible_only=True)
+    df = df.sort_values("open_date", ascending=False).head(limit)
     return list(zip(df["bid_no"], df["bid_ord"]))
 
 
