@@ -159,7 +159,8 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
             if pk:
                 badge = {"높음": "🟢", "보통": "🟡", "낮음": "🔴"}[pk["신뢰도"]]
                 line += (f"\n  💰 투찰금액 <b>{pk['투찰금액']:,}원</b>"
-                         f"\n     사정율 {pk['사정율']:.2f}% · 신뢰도 {badge}{pk['신뢰도']}")
+                         f"\n     사정율 {pk['사정율']:.2f}% · 신뢰도 {badge}{pk['신뢰도']}"
+                         + "".join(f"\n     · {_e(x)}" for x in analysis.evidence_lines(pk)[:4]))
             else:
                 line += "\n  💰 하한율 정보가 없어 금액 계산 불가 (공고문 확인)"
             lines.append(line)

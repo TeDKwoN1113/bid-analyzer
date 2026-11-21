@@ -181,14 +181,18 @@ if page == "🏠 오늘의 투찰":
             badge = {"높음": "🟢", "보통": "🟡", "낮음": "🔴"}[pk["신뢰도"]]
             st.metric("💰 투찰금액", f"{pk['투찰금액']:,}원")
             st.caption(f"사정율 {pk['사정율']:.2f}% · 신뢰도 {badge} {pk['신뢰도']}")
-            with st.expander("근거 보기"):
-                st.write(f"- 비교 대상: {pk['근거']} 과거 {pk['비교 공고']}건")
-                if pk["낙찰확률"] is not None:
-                    tm = f" (무작위로 넣을 때의 {pk['무작위 대비']:.1f}배)" if pk["무작위 대비"] else ""
-                    st.write(f"- 이 사정율의 과거 낙찰확률: {pk['낙찰확률']}%{tm}")
+            st.markdown("**📌 근거**  \n" + "  \n".join("• " + x for x in analysis.evidence_lines(pk)))
+            ex = pk["근거상세"]["examples"]
+            if ex:
+                st.markdown("최근 비슷한 공고에 이 사정율로 넣었다면  \n" + "  \n".join(
+                    f"– {x['공고명'][:28]} ({x['개찰일']}): 실제 {x['실제']:.2f} / 1순위 {x['1순위']:.2f} → **{x['결과']}**"
+                    for x in ex))
+            with st.expander("다른 후보 · 신뢰도 기준"):
                 for s_, a_, p_ in pk["후보"][1:]:
-                    st.write(f"- 다른 후보: {s_:.2f}% → {a_:,}원 (낙찰확률 {p_}%)")
-                st.caption("신뢰도: 비교 공고 100건 이상 + 무작위의 2배 이상 = 높음, 30건 이상 = 보통")
+                    st.write(f"- {s_:.2f}% → {a_:,}원 (과거 낙찰확률 {p_}%)")
+                st.caption("낙찰 조건: 실제 사정율 ≤ 내 사정율 < 1순위 사정율. "
+                           "신뢰도: 비교 공고 100건 이상 + 무작위의 2배 이상 = 높음, 30건 이상 = 보통, 그 외 낮음. "
+                           "더 자세히는 '🧮 투찰 계산기'에서 그래프로 볼 수 있습니다.")
             if r["bid_key"] in mine_map:
                 st.success(f"✓ 투찰 기록됨: {mine_map[r['bid_key']]:,.0f}원")
             else:

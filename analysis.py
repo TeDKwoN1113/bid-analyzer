@@ -144,8 +144,11 @@ def win_curve(hist: pd.DataFrame, lo: float = 98.0, hi: float = 102.0, step: flo
     g = grid[:, None]
     win = ((g >= a) & (g < b)).mean(axis=1) * 100
     valid = (g >= a).mean(axis=1) * 100
-    # 한 공고의 낙찰 구간은 매우 좁아서 그래프가 들쭉날쭉함 → ±0.05%p 범위 평균으로 평활화
-    k = max(1, int(round(0.05 / step)))
+    # 한 공고의 낙찰 구간은 매우 좁아서 그래프가 들쭉날쭉함 → 범위 평균으로 평활화
+    # 표본이 적을수록 더 넓게 평균 (우연히 한 번 맞은 지점에 끌려가지 않도록)
+    n = len(w)
+    width = 0.05 if n >= 200 else 0.1 if n >= 50 else 0.2
+    k = max(1, int(round(width / step)))
     smooth = pd.Series(win).rolling(2 * k + 1, center=True, min_periods=1).mean().values
     return pd.DataFrame({"사정율": grid, "낙찰확률": smooth.round(2), "낙찰확률(원값)": win.round(2),
                          "하한통과확률": valid.round(1), "표본": len(w)})
@@ -278,51 +281,112 @@ def similar_history(df: pd.DataFrame, row, keywords=None) -> pd.DataFrame:
     return same if len(win_windows(same)) >= 15 else h
 
 
-def pick_bid(df: pd.DataFrame, row, keywords=None) -> dict | None:
-    """공고 하나에 대한 최종 투찰금액 1개.
+def evidence(hist: pd.DataFrame, s_: float, n_examples: int = 3) -> dict:
+    """선택한 사정율 s_ 의 근거: 과거 공고에 그대로 넣었다면 결과가 어땠는지."""
+    w = hist.dropna(subset=["sajung", "winner_sajung"])
+    w = w[w["winner_sajung"] >= w["sajung"]]
+    n = len(w)
+    win = (w["sajung"] <= s_) & (s_ < w["winner_sajung"])
+    low = s_ < w["sajung"]
+    p = w["participants"].dropna()
+    p = p[p > 0]
+    expected = float((1 / p).sum() * n / len(p)) if len(p) else None   # 무작위로 넣었을 때 기대 1순위 건수
+    sj = hist["sajung"].dropna()
+    ex = w.sort_values("open_date", ascending=False).head(n_examples)
+    examples = []
+    for _, r in ex.iterrows():
+        if s_ < r["sajung"]:
+            res = "하한 미달"
+        elif s_ < r["winner_sajung"]:
+            res = "🏆 1순위"
+        else:
+            res = "1순위보다 높음"
+        examples.append({"공고명": r["name"], "개찰일": r["open_date"].strftime("%m/%d") if pd.notna(r["open_date"]) else "-",
+                         "실제": r["sajung"], "1순위": r["winner_sajung"], "결과": res})
+    return {
+        "n": n, "wins": int(win.sum()), "low": int(low.sum()),
+        "expected": expected,
+        "q25": float(sj.quantile(0.25)) if len(sj) else None,
+        "median": float(sj.median()) if len(sj) else None,
+        "q75": float(sj.quantile(0.75)) if len(sj) else None,
+        "examples": examples,
+    }
 
-    비교 범위를 단계적으로 넓혀(같은 기관 → 같은 업종·비슷한 금액 → 같은 업종 전체 → 전체)
-    항상 금액을 내되, 근거가 약하면 신뢰도를 낮게 표시한다.
+
+PRIOR_WEIGHT = 100  # 업종 전체 데이터를 '가상의 100건'만큼 섞음 (기관 데이터가 많을수록 기관 비중↑)
+
+
+def pick_bid(df: pd.DataFrame, row, keywords=None) -> dict | None:
+    """공고 하나에 대한 최종 투찰금액 1개와 근거.
+
+    낙찰확률 = (가까운 데이터[같은 기관 또는 비슷한 금액] + 업종 전체 데이터)를 섞어서 계산.
+      p = (n_local × p_local + 100 × p_업종전체) / (n_local + 100)
+    가까운 데이터가 많을수록 그 성향을 더 따르고, 적으면 업종 전체를 따른다.
     """
     base, lr = row["base_amt"], row["lower_rate"]
     if pd.isna(base) or pd.isna(lr) or base <= 0:
         return None
     a_val = row["a_value"] or 0
     done = df[df["sajung"].notna()]
-    tries = [("같은 기관", similar_history(df, row, keywords)),
-             ("같은 업종 전체", apply_filters(done, keywords=keywords)),
-             ("전체 공고", done)]
-    for basis, hist in tries:
-        n = len(win_windows(hist))
-        if n < 5:
-            continue
-        rec = recommend(hist, top=3)
-        if not rec:
-            continue
-        best = rec[0]
-        bp = baseline_prob(hist)
-        times = best["낙찰확률(%)"] / bp if bp else None
-        if basis.startswith("같은 기관") and (hist["org"] != row["org"]).any():
-            basis = "같은 업종·비슷한 금액"
-        if n >= 100 and (times or 0) >= 2:
-            conf = "높음"
-        elif n >= 30:
-            conf = "보통"
-        else:
-            conf = "낮음"
-        return {
-            "사정율": best["추천 사정율"],
-            "투찰금액": bid_amount(base, best["추천 사정율"], lr, a_val),
-            "신뢰도": conf, "비교 공고": n, "근거": basis,
-            "낙찰확률": best["낙찰확률(%)"], "무작위 대비": times,
-            "후보": [(x["추천 사정율"], bid_amount(base, x["추천 사정율"], lr, a_val), x["낙찰확률(%)"])
-                   for x in rec],
-        }
-    # 데이터가 거의 없을 때: 과거 사정율 중앙값(없으면 100%)
-    s_ = float(done["sajung"].median()) if len(done) else 100.0
-    return {"사정율": round(s_, 2), "투찰금액": bid_amount(base, s_, lr, a_val), "신뢰도": "낮음",
-            "비교 공고": len(done), "근거": "과거 사정율 중앙값", "낙찰확률": None, "무작위 대비": None,
-            "후보": []}
+    broad = apply_filters(done, keywords=keywords) if keywords else done
+    if len(win_windows(broad)) < 30:
+        broad = done
+    local = similar_history(df, row, keywords)
+    n_b, n_l = len(win_windows(broad)), len(win_windows(local))
+    if n_b < 5:
+        s_ = float(done["sajung"].median()) if len(done) else 100.0
+        return {"사정율": round(s_, 2), "투찰금액": bid_amount(base, s_, lr, a_val), "신뢰도": "낮음",
+                "비교 공고": len(done), "근거": "과거 사정율 중앙값(데이터 부족)", "낙찰확률": None,
+                "무작위 대비": None, "후보": [], "근거상세": evidence(done, round(s_, 2)), "근거_넓은": None}
+    cb = win_curve(broad)
+    cl = win_curve(local) if n_l else cb
+    mix = (n_l * cl["낙찰확률"].fillna(0) + PRIOR_WEIGHT * cb["낙찰확률"].fillna(0)) / (n_l + PRIOR_WEIGHT)
+    curve = cb.assign(낙찰확률=mix.round(3))
+    picks = best_points(curve, top=3)
+    best = picks[0]
+    s_ = round(best["사정율"], 2)
+    same_org = n_l and (local["org"] == row["org"]).all()
+    basis = f"같은 기관({row['org']})" if same_org else "같은 업종·비슷한 금액"
+    ev_l = evidence(local, s_) if n_l else None
+    ev_b = evidence(broad, s_)
+    bp = baseline_prob(broad)
+    times = best["낙찰확률"] / bp if bp else None
+    wins_total = (ev_l["wins"] if ev_l else 0) + ev_b["wins"]
+    if n_l >= 30 and ev_b["wins"] >= 5 and (times or 0) >= 2:
+        conf = "높음"
+    elif ev_b["wins"] >= 3 and (times or 0) >= 1.5:
+        conf = "보통"
+    else:
+        conf = "낮음"
+    return {
+        "사정율": s_, "투찰금액": bid_amount(base, s_, lr, a_val), "신뢰도": conf,
+        "비교 공고": n_l, "근거": basis, "낙찰확률": round(best["낙찰확률"], 2), "무작위 대비": times,
+        "후보": [(round(x["사정율"], 2), bid_amount(base, round(x["사정율"], 2), lr, a_val), round(x["낙찰확률"], 2))
+               for x in picks],
+        "근거상세": ev_l or ev_b, "근거_넓은": ev_b, "가까운 비중": n_l / (n_l + PRIOR_WEIGHT),
+    }
+
+
+def evidence_lines(pk: dict) -> list[str]:
+    """근거를 사람이 읽는 문장으로 (화면·알림 공용, HTML 없음)."""
+    e, eb = pk["근거상세"], pk.get("근거_넓은")
+    out = []
+    if eb is not None and e is not eb and e["n"]:
+        out.append(f"{pk['근거']} 과거 {e['n']}건: 이 사정율이면 {e['wins']}건 1순위, "
+                   f"{e['low']}건 하한 미달")
+        out.append(f"같은 업종 전체 {eb['n']}건: 이 사정율이면 {eb['wins']}건 1순위, "
+                   f"{eb['low']}건 하한 미달")
+        out.append(f"반영 비중: {pk['근거']} {pk['가까운 비중'] * 100:.0f}% · 업종 전체 "
+                   f"{100 - pk['가까운 비중'] * 100:.0f}%")
+    else:
+        b = eb or e
+        out.append(f"비교 대상: 과거 공고 {b['n']}건 — 이 사정율이면 {b['wins']}건 1순위, {b['low']}건 하한 미달")
+    if pk.get("무작위 대비"):
+        out.append(f"과거 낙찰확률 {pk['낙찰확률']}% = 아무렇게나 넣을 때의 {pk['무작위 대비']:.1f}배")
+    if e["median"] is not None:
+        out.append(f"{'이 기관' if pk['근거'].startswith('같은 기관') else '비교 공고'} 실제 사정율: "
+                   f"보통 {e['q25']:.2f} ~ {e['q75']:.2f}% (중앙 {e['median']:.2f}%)")
+    return out
 
 
 def baseline_prob(hist: pd.DataFrame) -> float | None:
