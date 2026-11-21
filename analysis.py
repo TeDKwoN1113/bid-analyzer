@@ -17,6 +17,7 @@ def load_dataset() -> pd.DataFrame:
                b.main_type, b.method, b.contract_method, b.notice_dt, b.close_dt, b.open_dt, b.est_price,
                b.lower_rate, b.url,
                ba.base_amt AS base_amt_notice, ba.a_value, ba.range_begin, ba.range_end,
+               ba.a_apply, ba.pure_cost, ba.a_detail,
                p.plan_price, p.base_amt AS base_amt_open,
                o.participants AS participants_open, o.status, o.first_company, o.first_amt,
                r.participants AS participants_final, r.winner, r.win_amt, r.win_rate
@@ -380,6 +381,23 @@ def blend(tier_list) -> tuple[pd.DataFrame, list[float]]:
     return curve.assign(낙찰확률=p.round(3)), weights
 
 
+PURE_COST_RATE = 0.98  # 적격심사: 투찰금액이 순공사원가의 98% 미만이면 낙찰 제외
+
+
+def pure_cost_min(row) -> int | None:
+    pc = row.get("pure_cost")
+    return int(math.ceil(pc * PURE_COST_RATE)) if pc is not None and pd.notna(pc) and pc > 0 else None
+
+
+def min_sajung_for_amount(base, lr, a_val, amount) -> float:
+    """투찰금액이 amount 이상이 되는 최소 사정율(0.01% 단위 올림)."""
+    s_ = ((amount - a_val) / (lr / 100) + a_val) / base * 100
+    s_ = math.ceil(s_ * 100) / 100
+    while bid_amount(base, s_, lr, a_val) < amount:
+        s_ = round(s_ + 0.01, 2)
+    return s_
+
+
 def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True) -> dict | None:
     """공고 하나에 대한 최종 투찰금액 1개와 근거.
 
@@ -402,8 +420,17 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True) -> d
                 "근거": "과거 사정율 중앙값(데이터 부족)", "낙찰확률": None, "무작위 대비": None, "후보": [],
                 "단계": [], "근거상세": evidence(done, round(s_, 2))}
     curve, weights = blend(tl)
+    floor_amt = pure_cost_min(row)
+    floor_s = min_sajung_for_amount(base, lr, a_val, floor_amt) if floor_amt else None
+    if floor_s is not None:
+        # 순공사원가 98% 미만 사정율은 후보에서 제외
+        curve = curve.assign(낙찰확률=curve["낙찰확률"].where(curve["사정율"] >= floor_s - 1e-9, 0))
     picks = best_points(curve, top=3)
+    if not picks:
+        picks = [{"사정율": floor_s or 100.0, "낙찰확률": 0.0, "하한통과확률": 0.0}]
     s_ = round(picks[0]["사정율"], 2)
+    if floor_s is not None and s_ < floor_s:
+        s_ = floor_s
     steps = [{"이름": name, "비중": w, **evidence(h, s_)} for (name, h), w in zip(tl, weights)]
     nat = steps[0]
     closest = tl[-1][1]
@@ -422,6 +449,7 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True) -> d
         "후보": [(round(x["사정율"], 2), bid_amount(base, round(x["사정율"], 2), lr, a_val), round(x["낙찰확률"], 2))
                for x in picks],
         "단계": steps, "근거상세": steps[-1],
+        "순공사원가 하한": floor_amt, "순공사원가 사정율": floor_s,
     }
 
 
@@ -438,6 +466,8 @@ def evidence_lines(pk: dict) -> list[str]:
         out.append(f"비교 대상: 과거 공고 {e['n']}건 (데이터 부족)")
     if pk.get("무작위 대비"):
         out.append(f"과거 낙찰확률 {pk['낙찰확률']}% = 아무렇게나 넣을 때의 {pk['무작위 대비']:.1f}배")
+    if pk.get("순공사원가 하한"):
+        out.append(f"순공사원가 98% 기준: {pk['순공사원가 하한']:,}원 이상 (사정율 {pk['순공사원가 사정율']:.2f}% 이상) → 반영됨")
     e = pk["근거상세"]
     if e.get("median") is not None:
         out.append(f"{e.get('이름', '비교 공고')} 실제 사정율: 보통 {e['q25']:.2f} ~ {e['q75']:.2f}% "

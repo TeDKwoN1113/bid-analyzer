@@ -119,6 +119,20 @@ def won(x):
     return "-" if pd.isna(x) else f"{x:,.0f}원"
 
 
+def a_value_text(r) -> str:
+    """A값 적용 여부와 구성 항목."""
+    import json as _json
+    if r.get("a_apply") == 0:
+        return "A값 미적용 공고"
+    try:
+        d = _json.loads(r["a_detail"]) if isinstance(r.get("a_detail"), str) else {}
+    except ValueError:
+        d = {}
+    if not d:
+        return "A값 없음" if not r.get("a_value") else f"A값 {won(r['a_value'])}"
+    return f"A값 {won(sum(d.values()))} = " + " + ".join(f"{k} {v:,.0f}" for k, v in d.items())
+
+
 def need_data():
     if raw.empty:
         st.info("아직 데이터가 없습니다. '⬇️ 데이터 수집' 메뉴에서 먼저 수집하거나, "
@@ -208,6 +222,8 @@ if page == "🏠 오늘의 투찰":
             st.write(f"기초금액 **{won(r['base_amt'])}** · 하한율 "
                      f"{'-' if pd.isna(r['lower_rate']) else f'{r.lower_rate:.3f}%'}"
                      f"{'' if not a_val else ' · A값 ' + won(a_val)}")
+            pc_min = analysis.pure_cost_min(r)
+            st.caption(a_value_text(r) + (f" · 순공사원가 98% 하한 {pc_min:,}원" if pc_min else ""))
             if pd.isna(r["lower_rate"]):
                 st.warning("하한율 정보가 없어 투찰금액을 계산할 수 없습니다. 공고문을 확인하세요.")
                 continue
@@ -373,6 +389,9 @@ elif page == "🧮 투찰 계산기":
     a_val = c3.number_input("A값(원, 없으면 0)", min_value=0.0, step=1000.0, format="%.0f",
                             value=float(row["a_value"]) if row is not None and pd.notna(row["a_value"]) else 0.0)
     st.caption("※ 하한율·A값은 반드시 공고문으로 다시 확인하세요.")
+    if row is not None:
+        st.caption(a_value_text(row))
+    pc_min = analysis.pure_cost_min(row) if row is not None else None
 
     st.markdown("**비교할 과거 데이터 범위**")
     cc1, cc2 = st.columns(2)
@@ -406,6 +425,9 @@ elif page == "🧮 투찰 계산기":
     my_p = curve["낙찰확률"].iloc[len(curve) // 2] if len(curve) else None
     m1, m2 = st.columns(2)
     m1.metric("투찰금액", f"{analysis.bid_amount(base, my_s, lr, a_val):,}원")
+    if pc_min and analysis.bid_amount(base, my_s, lr, a_val) < pc_min:
+        st.error(f"⚠️ 순공사원가 98%({pc_min:,}원) 미만이라 낙찰에서 제외됩니다. "
+                 f"사정율을 {analysis.min_sajung_for_amount(base, lr, a_val, pc_min):.2f}% 이상으로 올리세요.")
     m2.metric("이 사정율의 과거 낙찰확률", "-" if my_p is None or pd.isna(my_p) else f"{my_p:.2f}%")
 
     if row is not None:

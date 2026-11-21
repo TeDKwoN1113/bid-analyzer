@@ -89,20 +89,37 @@ def map_license(r: dict):
     return [("licenses", {"bid_key": key_of(r), "license": text[:2000]})] if text and _is_cnstwk(r) else []
 
 
-A_VALUE_FIELDS = [  # A값 구성 항목(보험료 등) - 응답에 있는 것만 합산
-    "npnInsrprm", "mrfnHealthInsrprm", "rtrfundNon", "odsnLngtrmrcprInsrprm",
-    "sftyMngcst", "sftyChckMngcst", "qltyMngcst", "usefulAmt",
-]
+# A값 구성 항목 (공고의 'A값 적용여부'가 Y일 때만 적용)
+A_VALUE_FIELDS = {
+    "npnInsrprm": "국민연금보험료",
+    "mrfnHealthInsrprm": "국민건강보험료",
+    "odsnLngtrmrcprInsrprm": "노인장기요양보험료",
+    "rtrfundNon": "퇴직공제부금비",
+    "sftyMngcst": "산업안전보건관리비",
+    "sftyChckMngcst": "안전관리비",
+    "qltyMngcst": "품질관리비",        # qltyMngcstAObjYn = Y 일 때만
+}
 
 
 def map_base(r: dict):
-    a = sum(num(r.get(f)) or 0 for f in A_VALUE_FIELDS)
+    apply_a = str(g(r, "bidPrceCalclAYn", default="Y")).upper() != "N"
+    detail = {}
+    for f, label in A_VALUE_FIELDS.items():
+        if f == "qltyMngcst" and str(g(r, "qltyMngcstAObjYn", default="Y")).upper() == "N":
+            continue
+        v = num(r.get(f)) or 0
+        if v:
+            detail[label] = v
+    a = sum(detail.values()) if apply_a else 0
     return [("base_amounts", {
         "bid_key": key_of(r),
         "base_amt": num(g(r, "bssamt", "bsisAmt")),
         "range_begin": num(g(r, "rsrvtnPrceRngBgnRate")),
         "range_end": num(g(r, "rsrvtnPrceRngEndRate")),
         "a_value": a or None,
+        "a_apply": 1 if apply_a else 0,
+        "pure_cost": num(g(r, "bssAmtPurcnstcst")),
+        "a_detail": json.dumps(detail, ensure_ascii=False) if detail else None,
     })]
 
 

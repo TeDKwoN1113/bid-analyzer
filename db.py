@@ -33,7 +33,8 @@ TABLES = {
     """, ["bid_key", "license"]),
     "base_amounts": ("""
         bid_key TEXT, base_amt DOUBLE PRECISION,
-        range_begin DOUBLE PRECISION, range_end DOUBLE PRECISION, a_value DOUBLE PRECISION
+        range_begin DOUBLE PRECISION, range_end DOUBLE PRECISION, a_value DOUBLE PRECISION,
+        a_apply INTEGER, pure_cost DOUBLE PRECISION, a_detail TEXT
     """, ["bid_key"]),
     # 공고별 예정가격 (예비가격 상세에서 추출)
     "plans": ("""
@@ -125,6 +126,16 @@ def engine():
     return _engines[u]
 
 
+def _columns(cols_sql: str) -> list[tuple[str, str]]:
+    out = []
+    for part in cols_sql.replace("\n", " ").split(","):
+        part = part.strip()
+        if part:
+            name, typ = part.split(None, 1)
+            out.append((name, typ))
+    return out
+
+
 def _init(eng) -> None:
     with eng.begin() as c:
         for name, (cols, pk) in TABLES.items():
@@ -132,6 +143,20 @@ def _init(eng) -> None:
             c.execute(text(f"CREATE TABLE IF NOT EXISTS {name} ({cols}{pk_sql})"))
         for ix in INDEXES:
             c.execute(text(ix))
+    # 새 버전에서 추가된 컬럼이 기존 테이블에 없으면 추가 (자동 업그레이드)
+    from sqlalchemy import inspect
+    insp = inspect(eng)
+    added = []
+    with eng.begin() as c:
+        for name, (cols, _) in TABLES.items():
+            have = {x["name"] for x in insp.get_columns(name)}
+            for col, typ in _columns(cols):
+                if col not in have:
+                    c.execute(text(f"ALTER TABLE {name} ADD COLUMN {col} {typ}"))
+                    added.append((name, col))
+        # 기초금액에 A값 적용여부·순공사원가가 새로 생겼으면 과거 기초금액을 다시 받도록 표시 삭제
+        if ("base_amounts", "a_apply") in added:
+            c.execute(text("DELETE FROM collect_days WHERE op = 'base_amount'"))
 
 
 def upsert_many(table: str, rows: list[dict]) -> int:
