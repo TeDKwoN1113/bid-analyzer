@@ -64,6 +64,18 @@ DEFAULT_SETTINGS = {
     "rank_top_n": 100,
     "rank_max_bids_per_run": 300,
     "rank_lookback_days": 365,
+    # 알림 (텔레그램/이메일) - 비밀값은 Secrets 에 넣음
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "email_user": "",          # 보내는 Gmail 주소
+    "email_password": "",      # Gmail 앱 비밀번호(16자리)
+    "email_to": "",            # 받는 주소(쉼표로 여러 개)
+    "email_smtp": "smtp.gmail.com",
+    "app_url": "https://ted-bid.streamlit.app",
+    # 알림 조건 (비우면 분석용 기본 조건 사용)
+    "notify_keywords": [],
+    "notify_regions": [],
+    "notify_max_amount": 0,
     # 분석 대상 업종 키워드 (공고명/주공종명에 포함되면 대상). 나중에 '통신', '소방' 등 추가.
     "target_keywords": ["전기"],
     # 기본 필터
@@ -84,7 +96,11 @@ def load_settings() -> dict:
                 s[k] = v
     # 웹사이트(Streamlit Cloud)에서는 'Secrets'에 넣은 값을 우선 사용
     for env_name, field in (("DATA_GO_KR_KEY", "service_key"), ("APP_PASSWORD", "app_password"),
-                            ("DATABASE_URL", "database_url")):
+                            ("DATABASE_URL", "database_url"),
+                            ("TELEGRAM_BOT_TOKEN", "telegram_bot_token"),
+                            ("TELEGRAM_CHAT_ID", "telegram_chat_id"),
+                            ("EMAIL_USER", "email_user"), ("EMAIL_PASSWORD", "email_password"),
+                            ("EMAIL_TO", "email_to")):
         val = os.environ.get(env_name)
         if not val:
             try:

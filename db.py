@@ -54,6 +54,10 @@ TABLES = {
     "collect_days": ("""
         op TEXT, day TEXT, rows INTEGER, done_at TEXT
     """, ["op", "day"]),
+    # 알림 보낸 기록 (같은 알림 중복 방지)
+    "notified": ("""
+        bid_key TEXT, kind TEXT, sent_at TEXT
+    """, ["bid_key", "kind"]),
     "collect_log": ("""
         run_at TEXT, kind TEXT, period TEXT, count INTEGER, message TEXT
     """, None),

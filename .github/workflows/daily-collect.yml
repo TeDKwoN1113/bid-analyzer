@@ -2,8 +2,9 @@ name: 매일 자동 수집
 
 on:
   schedule:
-    - cron: "17 20 * * *"   # 매일 한국시간 오전 5시 17분
-  workflow_dispatch:         # Actions 화면에서 "Run workflow" 버튼으로 바로 실행 가능
+    - cron: "17 20 * * *"        # 매일 05:17 (한국시간) - 전체 수집 + 과거 데이터 채우기 + 알림
+    - cron: "7 0,4,8 * * 1-5"    # 평일 09:07, 13:07, 17:07 (한국시간) - 빠른 수집 + 알림
+  workflow_dispatch:              # Actions 화면에서 "Run workflow" 버튼으로 바로 실행 (전체 수집)
 
 concurrency:
   group: collect
@@ -17,6 +18,11 @@ jobs:
       TZ: Asia/Seoul
       DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      EMAIL_USER: ${{ secrets.EMAIL_USER }}
+      EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+      EMAIL_TO: ${{ secrets.EMAIL_TO }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,5 +31,12 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-collector.txt
       - run: pip install -r requirements-collector.txt
-      - name: 수집 (최근 3일 + 과거 데이터 채우기)
+      - name: 빠른 수집 (낮 시간)
+        if: github.event.schedule == '7 0,4,8 * * 1-5'
+        run: python collector.py --quick
+      - name: 전체 수집 (최근 3일 + 과거 데이터 채우기 + 관심공고 개찰순위)
+        if: github.event.schedule != '7 0,4,8 * * 1-5'
         run: python collector.py --auto
+      - name: 알림 보내기
+        if: always()
+        run: python notify.py

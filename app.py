@@ -401,6 +401,48 @@ elif page == "⚙️ 설정 · API 점검":
         st.success("저장했습니다. 사이드바의 '샘플 데이터로 보기'를 끄면 실제 데이터를 씁니다.")
 
     st.markdown("---")
+    st.header("🔔 알림")
+    import notify
+    ch = notify.channels(settings)
+    if ch:
+        st.success(f"알림 채널 연결됨: {', '.join(ch)}")
+    else:
+        st.info("텔레그램 또는 이메일이 아직 설정되지 않았습니다. 사용설명서의 '알림 설정'을 참고해 "
+                "Streamlit Secrets 와 GitHub Secrets 에 값을 넣어주세요.")
+    kw_n = settings["notify_keywords"] or settings["target_keywords"]
+    rg_n = settings["notify_regions"] or settings["default_regions"]
+    mx_n = settings["notify_max_amount"] or settings["max_amount"]
+    st.caption(f"알림 조건: 업종 {', '.join(kw_n)} · 지역 {', '.join(rg_n) or '전국'} · {mx_n / 1e8:,.0f}억 미만 "
+               "(위의 기본 키워드/금액 설정을 따릅니다)")
+    b1, b2, b3 = st.columns(3)
+    if b1.button("텔레그램 chat_id 찾기"):
+        if not settings.get("telegram_bot_token"):
+            st.error("먼저 Secrets 에 TELEGRAM_BOT_TOKEN 을 넣어주세요.")
+        else:
+            try:
+                chats = notify.telegram_chats(settings["telegram_bot_token"])
+                if chats:
+                    st.dataframe(pd.DataFrame(chats), hide_index=True)
+                    st.caption("위 chat_id 숫자를 TELEGRAM_CHAT_ID 로 Secrets 에 넣으세요.")
+                else:
+                    st.warning("대화 기록이 없습니다. 텔레그램에서 내 봇을 열고 아무 메시지나 보낸 뒤 다시 누르세요.")
+            except Exception as e:  # noqa: BLE001
+                st.error(f"조회 실패: {e}")
+    if b2.button("테스트 알림 보내기"):
+        try:
+            sent = notify.send("⚡ 입찰 분석기 테스트", "알림 연결이 정상입니다 ✅")
+            st.success(f"보냄: {', '.join(sent)}") if sent else st.warning("설정된 채널이 없습니다.")
+        except Exception as e:  # noqa: BLE001
+            st.error(f"전송 실패: {e}")
+    if b3.button("다음 알림 미리보기"):
+        text, keys = notify.build()
+        if text:
+            st.caption(f"{len(keys)}건 (아직 보내지 않음)")
+            st.markdown(text.replace("\n", "  \n"), unsafe_allow_html=True)
+        else:
+            st.info("보낼 새 소식이 없습니다.")
+
+    st.markdown("---")
     st.header("🔌 API 점검")
     st.caption("API가 정상 응답하는지, 어떤 항목(필드)이 오는지 확인합니다. 문제가 생기면 이 화면 결과를 캡처해 주세요.")
     op = st.selectbox("API 종류", list(OPERATIONS.keys()),

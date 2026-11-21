@@ -242,6 +242,21 @@ def auto(progress=print) -> dict:
     return summary
 
 
+def quick(progress=print) -> dict:
+    """낮 시간 빠른 수집: 어제·오늘 공고, 기초금액, 개찰결과만."""
+    today = date.today()
+    days = [today - timedelta(days=1), today]
+    summary = {}
+    for op in ("bid_list", "base_amount", "openings"):
+        res = collect_days(op, days)
+        summary[LABEL[op]] = res
+        if progress:
+            progress(f"{LABEL[op]}: {res['count']:,}건 {res['stopped']}")
+    db.log("빠른 수집", f"{days[0]}~{today}", sum(v["count"] for v in summary.values()),
+           "; ".join(v["stopped"] for v in summary.values() if v["stopped"]))
+    return summary
+
+
 def collect_ranks(bid_no: str, bid_ord: str = "000", top_n: int | None = None) -> int:
     """특정 공고의 개찰순위(업체별 투찰금액) 수집. top_n 이 있으면 상위 N개 업체만."""
     s = load_settings()
@@ -332,10 +347,14 @@ if __name__ == "__main__":
     ap.add_argument("--from", dest="d1")
     ap.add_argument("--to", dest="d2")
     ap.add_argument("--auto", action="store_true", help="최근 3일 + 과거 데이터 자동 채우기")
+    ap.add_argument("--quick", action="store_true", help="어제·오늘 공고/기초금액/개찰결과만 빠르게")
     a = ap.parse_args()
     print("DB:", "원격(PostgreSQL)" if db.is_remote() else db.url())
     if a.auto:
         auto()
+        raise SystemExit(0)
+    if a.quick:
+        quick()
         raise SystemExit(0)
     if a.d1:
         d1 = datetime.strptime(a.d1, "%Y%m%d").date()

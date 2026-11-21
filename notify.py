@@ -1,0 +1,226 @@
+"""알림: 새 공고 / 기초금액 공개(추천 투찰금액) / 개찰 결과 → 텔레그램·이메일.
+
+    python notify.py            # 알림 보내기 (보낸 건은 다시 안 보냄)
+    python notify.py --dry-run  # 보내지 않고 내용만 출력
+    python notify.py --test     # 테스트 메시지
+"""
+import argparse
+import html
+import re
+import smtplib
+from email.mime.text import MIMEText
+
+import pandas as pd
+import requests
+
+import analysis
+import db
+from config import load_settings
+
+TG_LIMIT = 3800  # 텔레그램 메시지 1개 최대 길이(여유 포함)
+
+
+# ---------------- 보내기 ----------------
+
+def channels(s=None) -> list[str]:
+    s = s or load_settings()
+    out = []
+    if s.get("telegram_bot_token") and s.get("telegram_chat_id"):
+        out.append("텔레그램")
+    if s.get("email_user") and s.get("email_password") and s.get("email_to"):
+        out.append("이메일")
+    return out
+
+
+def send_telegram(text: str, s=None) -> None:
+    s = s or load_settings()
+    # 공고 단위("• "로 시작)로 나눠서 메시지 길이 제한을 넘지 않게
+    units = re.split(r"\n(?=• |\n)", text)
+    chunks, cur = [], ""
+    for u in units:
+        if len(cur) + len(u) + 1 > TG_LIMIT and cur:
+            chunks.append(cur)
+            cur = ""
+        cur += u + "\n"
+    if cur.strip():
+        chunks.append(cur)
+    for c in chunks:
+        r = requests.post(f"https://api.telegram.org/bot{s['telegram_bot_token']}/sendMessage",
+                          json={"chat_id": s["telegram_chat_id"], "text": c.strip(), "parse_mode": "HTML",
+                                "disable_web_page_preview": True}, timeout=30)
+        if not r.ok:
+            raise RuntimeError(f"텔레그램 전송 실패: {r.status_code} {r.text[:300]}")
+
+
+def send_email(subject: str, text: str, s=None) -> None:
+    s = s or load_settings()
+    body = text.replace("\n", "<br>")
+    msg = MIMEText(f"<div style='font-family:sans-serif;font-size:14px'>{body}</div>", "html", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = s["email_user"]
+    to = [t.strip() for t in s["email_to"].split(",") if t.strip()]
+    msg["To"] = ", ".join(to)
+    with smtplib.SMTP_SSL(s.get("email_smtp") or "smtp.gmail.com", 465, timeout=30) as smtp:
+        smtp.login(s["email_user"], s["email_password"])
+        smtp.sendmail(s["email_user"], to, msg.as_string())
+
+
+def send(subject: str, text: str) -> list[str]:
+    s = load_settings()
+    sent = []
+    if "텔레그램" in channels(s):
+        send_telegram(f"<b>{html.escape(subject)}</b>\n\n{text}", s)
+        sent.append("텔레그램")
+    if "이메일" in channels(s):
+        send_email(subject, text, s)
+        sent.append("이메일")
+    return sent
+
+
+def telegram_chats(token: str) -> list[dict]:
+    """봇에게 말을 건 대화방 목록 (chat_id 찾기용)."""
+    r = requests.get(f"https://api.telegram.org/bot{token}/getUpdates", timeout=30)
+    r.raise_for_status()
+    chats = {}
+    for u in r.json().get("result", []):
+        m = u.get("message") or u.get("channel_post") or u.get("my_chat_member") or {}
+        c = m.get("chat")
+        if c:
+            name = c.get("title") or " ".join(filter(None, [c.get("first_name"), c.get("last_name")]))
+            chats[c["id"]] = {"chat_id": c["id"], "이름": name, "종류": c.get("type")}
+    return list(chats.values())
+
+
+# ---------------- 내용 만들기 ----------------
+
+def _e(x) -> str:
+    return html.escape("" if x is None or (isinstance(x, float) and pd.isna(x)) else str(x))
+
+
+def _won(x) -> str:
+    return "-" if x is None or pd.isna(x) else f"{x:,.0f}원"
+
+
+def _dt(x) -> str:
+    t = pd.to_datetime(x, errors="coerce", format="mixed")
+    return "-" if pd.isna(t) else t.strftime("%m/%d(%a) %H:%M").replace(
+        "Mon", "월").replace("Tue", "화").replace("Wed", "수").replace("Thu", "목").replace(
+        "Fri", "금").replace("Sat", "토").replace("Sun", "일")
+
+
+def _title(r) -> str:
+    name = _e(r["name"])
+    if isinstance(r.get("url"), str) and r["url"].startswith("http"):
+        return f'<a href="{html.escape(r["url"])}">{name}</a>'
+    return f"<b>{name}</b>"
+
+
+def similar_history(df: pd.DataFrame, row, keywords) -> pd.DataFrame:
+    """추천 계산용 과거 공고: 같은 업종, 기초금액 ±50%, 같은 기관이 충분하면 기관 우선."""
+    h = analysis.apply_filters(df[df["sajung"].notna()], keywords=keywords)
+    base = row["base_amt"]
+    if pd.notna(base) and base > 0:
+        h = h[(h["base_amt"] >= base * 0.5) & (h["base_amt"] <= base * 1.5)]
+    same = h[h["org"] == row["org"]]
+    return same if len(analysis.win_windows(same)) >= 15 else h
+
+
+def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
+    """보낼 메시지 본문과 (공고키, 종류) 목록."""
+    s = load_settings()
+    kw = s["notify_keywords"] or s["target_keywords"]
+    rg = s["notify_regions"] or s["default_regions"]
+    mx = s["notify_max_amount"] or s["max_amount"]
+    df = analysis.load_dataset() if df is None else df
+    if df.empty:
+        return "", []
+    t = analysis.apply_filters(df, keywords=kw, regions=rg, max_amt=mx)
+    sent = db.query_df("SELECT bid_key, kind FROM notified")
+    done = set(zip(sent["bid_key"], sent["kind"]))
+    now = pd.Timestamp.now()
+    notice = pd.to_datetime(t["notice_dt"], errors="coerce", format="mixed")
+    keys, parts = [], []
+
+    # 1) 새 공고 (최근 3일 내 공고, 아직 개찰 전)
+    new = t[(t["open_date"] >= now) & (notice >= now - pd.Timedelta(days=3))]
+    new = new[~new["bid_key"].map(lambda k: (k, "new") in done).astype(bool)].sort_values("open_date")
+    if len(new):
+        lines = [f"🆕 <b>새 공고 {len(new)}건</b>"]
+        for _, r in new.iterrows():
+            amt = r["base_amt"] if pd.notna(r["base_amt"]) else r["est_price"]
+            lines.append(f"• {_title(r)}\n  {_e(r['org'])} | {_e(r['region'])}\n"
+                         f"  {'기초' if pd.notna(r['base_amt']) else '추정'} {_won(amt)} | "
+                         f"개찰 {_dt(r['open_dt'])} | {_e(r['contract_method'] or r['method'])}")
+            keys.append((r["bid_key"], "new"))
+        parts.append("\n".join(lines))
+
+    # 2) 기초금액 공개 → 추천 투찰금액
+    base = t[(t["open_date"] >= now) & t["base_amt_notice"].notna()]
+    base = base[~base["bid_key"].map(lambda k: (k, "base") in done).astype(bool)].sort_values("open_date")
+    if len(base):
+        lines = [f"💰 <b>기초금액 공개 {len(base)}건</b>"]
+        for _, r in base.iterrows():
+            lr = "-" if pd.isna(r["lower_rate"]) else f"{r['lower_rate']:.3f}%"
+            av = f" | A값 {_won(r['a_value'])}" if r["a_value"] else ""
+            line = (f"• {_title(r)}\n  {_e(r['org'])} | 개찰 {_dt(r['open_dt'])}\n"
+                    f"  기초금액 {_won(r['base_amt'])} | 하한율 {lr}{av}")
+            h = similar_history(df, r, kw)
+            rec = analysis.recommend(h, top=1)
+            if rec and pd.notna(r["lower_rate"]):
+                x = rec[0]
+                amt = analysis.bid_amount(r["base_amt"], x["추천 사정율"], r["lower_rate"], r["a_value"] or 0)
+                line += (f"\n  🎯 추천 사정율 <b>{x['추천 사정율']:.2f}%</b> → 투찰 <b>{amt:,}원</b>"
+                         f"\n     (과거 {x['비교 공고 수']}건 기준 낙찰확률 {x['낙찰확률(%)']}%)")
+            else:
+                line += "\n  🎯 비교할 과거 데이터가 부족해 추천 없음"
+            lines.append(line)
+            keys.append((r["bid_key"], "base"))
+        parts.append("\n".join(lines))
+
+    # 3) 개찰 결과 (최근 3일)
+    res = t[(t["open_date"] < now) & (t["open_date"] >= now - pd.Timedelta(days=3))
+            & (t["first_company"].notna() | t["plan_price"].notna())]
+    res = res[~res["bid_key"].map(lambda k: (k, "result") in done).astype(bool)].sort_values("open_date")
+    if len(res):
+        lines = [f"📊 <b>개찰 결과 {len(res)}건</b>"]
+        for _, r in res.iterrows():
+            sj = "-" if pd.isna(r["sajung"]) else f"{r['sajung']:.3f}%"
+            wj = "-" if pd.isna(r["winner_sajung"]) else f"{r['winner_sajung']:.3f}%"
+            pc = "-" if pd.isna(r["participants"]) else f"{int(r['participants'])}개사"
+            lines.append(f"• {_title(r)}\n  1순위 {_e(r['first_company'])} {_won(r['first_amt'])}\n"
+                         f"  실제 사정율 {sj} | 1순위 사정율 {wj} | 참가 {pc}")
+            keys.append((r["bid_key"], "result"))
+        parts.append("\n".join(lines))
+
+    if not parts:
+        return "", []
+    footer = f'🔗 <a href="{html.escape(s["app_url"])}">입찰 분석기 열기</a>'
+    return "\n\n".join(parts + [footer]), keys
+
+
+def run(dry_run: bool = False) -> str:
+    text, keys = build()
+    if not text:
+        return "보낼 새 소식 없음"
+    if dry_run:
+        print(text)
+        return f"(미리보기) {len(keys)}건"
+    if not channels():
+        return "알림 채널(텔레그램/이메일)이 설정되지 않아 보내지 않음"
+    sent = send("⚡ 입찰 알림", text)
+    now = db.now()
+    db.upsert_many("notified", [{"bid_key": k, "kind": kind, "sent_at": now} for k, kind in keys])
+    msg = f"{', '.join(sent)}로 {len(keys)}건 알림"
+    db.log("알림", "-", len(keys), msg)
+    return msg
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--test", action="store_true")
+    a = ap.parse_args()
+    if a.test:
+        print(send("⚡ 입찰 분석기 테스트", "알림 연결이 정상입니다 ✅") or "채널 설정 없음")
+    else:
+        print(run(a.dry_run))
