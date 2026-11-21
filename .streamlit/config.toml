@@ -1,0 +1,14 @@
+[server]
+# 같은 네트워크/외부(Tailscale 등)에서 접속 가능하도록
+address = "0.0.0.0"
+port = 8501
+headless = true
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+primaryColor = "#1f6feb"
