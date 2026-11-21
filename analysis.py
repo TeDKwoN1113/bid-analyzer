@@ -131,6 +131,15 @@ def bid_amount(base_amt: float, sajung: float, lower_rate: float, a_value: float
     return int(math.ceil((plan - a_value) * lower_rate / 100 + a_value))
 
 
+def n_windows(hist: pd.DataFrame) -> int:
+    """낙찰 구간이 있는 공고 수 (빠른 계산)."""
+    if hist is None or hist.empty:
+        return 0
+    a = hist["sajung"].to_numpy(dtype=float, na_value=np.nan)
+    b = hist["winner_sajung"].to_numpy(dtype=float, na_value=np.nan)
+    return int(np.count_nonzero(b >= a))  # NaN 비교는 False
+
+
 def win_windows(hist: pd.DataFrame) -> pd.DataFrame:
     """과거 공고별 '낙찰 구간' [실제 사정율, 1순위 사정율).
 
@@ -145,16 +154,22 @@ def win_windows(hist: pd.DataFrame) -> pd.DataFrame:
 
 def win_curve(hist: pd.DataFrame, lo: float = 98.0, hi: float = 102.0, step: float = 0.01) -> pd.DataFrame:
     """사정율별 과거 낙찰확률·하한통과확률."""
-    w = win_windows(hist)
     grid = np.round(np.arange(lo, hi + 1e-9, step), 4)
+    av = hist["sajung"].to_numpy(dtype=float, na_value=np.nan) if len(hist) else np.array([])
+    bv = hist["winner_sajung"].to_numpy(dtype=float, na_value=np.nan) if len(hist) else np.array([])
+    ok = bv >= av
+    w = pd.DataFrame({"sajung": av[ok], "winner_sajung": bv[ok]})
     if w.empty:
         return pd.DataFrame({"사정율": grid, "낙찰확률": np.nan, "낙찰확률(원값)": np.nan,
                              "하한통과확률": np.nan, "표본": 0})
-    a = w["sajung"].values[None, :]
-    b = w["winner_sajung"].values[None, :]
-    g = grid[:, None]
-    win = ((g >= a) & (g < b)).mean(axis=1) * 100
-    valid = (g >= a).mean(axis=1) * 100
+    # 정렬 + 이진탐색으로 계산 (공고 수 × 격자 비교보다 훨씬 빠름)
+    #   낙찰 = 실제 사정율 ≤ g < 낙찰자 사정율 인 공고 수 = #(a ≤ g) − #(b ≤ g)   (b ≥ a)
+    a = np.sort(w["sajung"].values)
+    b = np.sort(w["winner_sajung"].values)
+    n_a = np.searchsorted(a, grid, side="right")
+    n_b = np.searchsorted(b, grid, side="right")
+    win = (n_a - n_b) / len(w) * 100
+    valid = n_a / len(w) * 100
     # 한 공고의 낙찰 구간은 매우 좁아서 그래프가 들쭉날쭉함 → 범위 평균으로 평활화
     # 표본이 적을수록 더 넓게 평균 (우연히 한 번 맞은 지점에 끌려가지 않도록)
     n = len(w)
@@ -289,7 +304,7 @@ def similar_history(df: pd.DataFrame, row, keywords=None) -> pd.DataFrame:
     if pd.notna(base) and base > 0:
         h = h[(h["base_amt"] >= base * 0.5) & (h["base_amt"] <= base * 1.5)]
     same = h[h["org"] == row["org"]]
-    return same if len(win_windows(same)) >= 15 else h
+    return same if n_windows(same) >= 15 else h
 
 
 def evidence(hist: pd.DataFrame, s_: float, n_examples: int = 3) -> dict:
@@ -331,7 +346,7 @@ def _band(h: pd.DataFrame, base, min_n: int) -> pd.DataFrame:
     """기초금액 ±50% 공고가 충분하면 그것만, 아니면 전체."""
     if pd.notna(base) and base > 0:
         b = h[(h["base_amt"] >= base * 0.5) & (h["base_amt"] <= base * 1.5)]
-        if len(win_windows(b)) >= min_n:
+        if n_windows(b) >= min_n:
             return b
     return h
 
@@ -359,20 +374,49 @@ def local_region_history(done: pd.DataFrame, region: str) -> pd.DataFrame:
     return done[m]
 
 
+_ctx_cache: dict = {}
+
+
+def _context(df: pd.DataFrame, keywords, region: str):
+    """같은 df·업종·지역에 대한 공통 부분집합을 한 번만 계산해 재사용 (공고마다 15만 건을 다시 거르지 않도록)."""
+    key = (id(df), len(df), tuple(keywords or ()), region)
+    hit = _ctx_cache.get(key)
+    if hit is not None and hit["df"] is df:
+        return hit
+    done = df[df["sajung"].notna()]
+    if keywords and df.attrs.get("_ind_key") == tuple(keywords) and "_ind" in df:
+        ind = done[done["_ind"]]          # 백테스트: 미리 계산해 둔 업종 표시 사용
+    else:
+        ind = apply_filters(done, keywords=keywords) if keywords else done
+    if n_windows(ind) < 30:
+        ind = done
+    if region and df.attrs.get("_loc_key") == region and "_loc" in df:
+        loc = ind[ind["_loc"]]
+    else:
+        loc = local_region_history(ind, region) if region else ind.iloc[0:0]
+    # 계산에 필요한 열만 남겨 가볍게 (넓은 표를 반복 복사하는 비용 절감)
+    cols = [c for c in ("bid_key", "name", "org", "open_date", "sajung", "winner_sajung",
+                        "participants", "base_amt", "first_won") if c in df]
+    done, ind, loc = done[cols], ind[cols], loc[cols]
+    ctx = {"df": df, "done": done, "ind": ind, "loc": loc, "by_org": dict(tuple(ind.groupby("org")))}
+    if len(_ctx_cache) > 8:
+        _ctx_cache.clear()
+    _ctx_cache[key] = ctx
+    return ctx
+
+
 def tiers(df: pd.DataFrame, row, keywords=None) -> list[tuple[str, pd.DataFrame]]:
     """비교 단계: [전국, (우리 지역), (같은 기관)] — 넓은 것부터."""
-    done = df[df["sajung"].notna()]
     region = db.company()["region"]
-    ind = apply_filters(done, keywords=keywords) if keywords else done
-    if len(win_windows(ind)) < 30:
-        ind = done
+    ctx = _context(df, keywords, region)
+    ind = ctx["ind"]
     out = [("전국 같은 업종", _band(ind, row["base_amt"], 200))]
     if region and is_local_bid(row, region):
-        loc = local_region_history(ind, region)
-        if len(win_windows(loc)):
+        loc = ctx["loc"]
+        if n_windows(loc):
             out.append((f"{region} 지역제한 공고", _band(loc, row["base_amt"], 100)))
-    org = ind[ind["org"] == row["org"]]
-    if len(win_windows(org)) >= 5:
+    org = ctx["by_org"].get(row["org"], ind.iloc[0:0])
+    if n_windows(org) >= 5:
         out.append((f"같은 기관({row['org']})", org))
     return out
 
@@ -383,7 +427,7 @@ def blend(tier_list) -> tuple[pd.DataFrame, list[float]]:
     p = curve["낙찰확률"].fillna(0)
     weights = [1.0]
     for _, h in tier_list[1:]:
-        n = len(win_windows(h))
+        n = n_windows(h)
         c = win_curve(h)["낙찰확률"].fillna(0)
         w = n / (n + PRIOR_WEIGHT)
         p = w * c + (1 - w) * p
@@ -453,11 +497,11 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True,
     if pd.isna(base) or pd.isna(lr) or base <= 0:
         return None
     a_val = row["a_value"] or 0
-    done = df[df["sajung"].notna()]
+    done = _context(df, keywords, db.company()["region"])["done"]
     tl = tiers(df, row, keywords)
     if not use_region:
         tl = [t for t in tl if "지역제한" not in t[0]]
-    if len(win_windows(tl[0][1])) < 5:
+    if n_windows(tl[0][1]) < 5:
         s_ = float(done["sajung"].median()) if len(done) else 100.0
         return {"사정율": round(s_, 2), "투찰금액": bid_amount(base, s_, lr, a_val), "신뢰도": "낮음",
                 "근거": "과거 사정율 중앙값(데이터 부족)", "낙찰확률": None, "무작위 대비": None, "후보": [],
@@ -468,7 +512,7 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True,
         tl = [t for t in tl if "지역제한" not in t[0]]
     elif mode == "national":
         tl = tl[:1]
-    elif mode == "region_only" and reg_tiers and len(win_windows(reg_tiers[0][1])) >= 5:
+    elif mode == "region_only" and reg_tiers and n_windows(reg_tiers[0][1]) >= 5:
         tl = reg_tiers
     curve, weights = blend(tl)
     fixed_s = None
@@ -664,7 +708,7 @@ def strategy_picks(hist: pd.DataFrame, row, keywords) -> dict:
     done = hist[hist["sajung"].notna()]
     tl = tiers(hist, row, keywords)
     out = {}
-    if len(win_windows(tl[0][1])) < 5:
+    if n_windows(tl[0][1]) < 5:
         return out
     out["① 현재 방식 (기관+울산+전국)"] = _pick_from_curve(blend(tl)[0])
     no_reg = [t for t in tl if "지역제한" not in t[0]]
@@ -672,7 +716,7 @@ def strategy_picks(hist: pd.DataFrame, row, keywords) -> dict:
         out["② 울산 단계 없이 (기관+전국)"] = _pick_from_curve(blend(no_reg)[0])
     out["③ 전국 같은 업종만"] = _pick_from_curve(win_curve(tl[0][1]))
     reg = [t for t in tl if "지역제한" in t[0]]
-    if reg and len(win_windows(reg[0][1])) >= 5:
+    if reg and n_windows(reg[0][1]) >= 5:
         out["④ 울산 지역제한 공고만"] = _pick_from_curve(win_curve(reg[0][1]))
     out["⑤ 단순 평균 (사정율 평균)"] = round(float(tl[0][1]["sajung"].mean()), 2)
     w = tl[0][1]["winner_sajung"].dropna()
@@ -694,14 +738,31 @@ def backtest(df: pd.DataFrame, keywords, test_days: int = 90, max_tests: int = 3
     # 개찰순위(상위 업체 투찰금액)가 있으면 '가상 순위'까지 계산
     rk = db.query_df("SELECT bid_key, amount FROM ranks WHERE rank > 0 AND amount IS NOT NULL")
     amounts = {k: np.sort(g["amount"].values) for k, g in rk.groupby("bid_key")} if len(rk) else {}
+    # 업종·지역 표시를 전체 기간에 대해 한 번만 계산 (시험 공고마다 15만 건을 다시 거르지 않도록)
+    kw_all = tuple(keywords or ())
+    region = db.company()["region"]
+    pre = df[df["sajung"].notna() | df["bid_key"].isin(tests["bid_key"])].copy()
+    if kw_all:
+        pre["_ind"] = pre["bid_key"].isin(apply_filters(pre, keywords=list(kw_all))["bid_key"])
+        pre.attrs["_ind_key"] = kw_all
+    if region:
+        pre["_loc"] = pre["bid_key"].isin(local_region_history(pre, region)["bid_key"])
+        pre.attrs["_loc_key"] = region
+    keep = [c for c in ("bid_key", "name", "org", "open_date", "sajung", "winner_sajung", "participants",
+                        "base_amt", "first_won", "_ind", "_loc") if c in pre]
+    attrs = dict(pre.attrs)
+    pre = pre[keep].sort_values("open_date")
+    pre.attrs.update(attrs)
     rows = []
     for i, (_, r) in enumerate(tests.iterrows()):
         if progress:
             progress(i + 1, len(tests))
-        hist = df[df["open_date"] < r["open_date"]]
+        hist = pre[pre["open_date"] < r["open_date"]]
+        hist.attrs.update(pre.attrs)
         if hist["sajung"].notna().sum() < min_history:
             continue
-        picks = strategy_picks(hist, r, bid_keywords(r))
+        kw_r = bid_keywords(r)
+        picks = strategy_picks(hist, r, kw_r if tuple(kw_r) != kw_all or not kw_all else list(kw_all))
         p = r["participants"]
         for name, s_ in picks.items():
             if s_ is None:

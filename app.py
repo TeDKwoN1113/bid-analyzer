@@ -100,7 +100,7 @@ period = st.sidebar.selectbox("기간", ["최근 3개월", "최근 6개월", "�
 days = {"최근 3개월": 90, "최근 6개월": 180, "최근 1년": 365, "최근 2년": 730}.get(period)
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=600)
 def _load(sample: bool):
     db.use_sample(sample)
     return analysis.load_dataset()
