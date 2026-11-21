@@ -11,6 +11,26 @@ class ApiError(Exception):
     pass
 
 
+class QuotaError(ApiError):
+    """하루 호출 한도 초과 - 내일 다시 이어서 하면 됨."""
+
+
+class KeyError_(ApiError):
+    """인증키 문제."""
+
+
+_rows_ok = {}  # API별로 실제 허용되는 numOfRows 기억
+
+
+def _raise(code: str, msg: str):
+    code = str(code)
+    if code == "22" or "LIMITED" in msg:
+        raise QuotaError(f"하루 호출 한도 초과 [{code}] {msg}")
+    if code in ("20", "30", "31", "32") or "SERVICE_KEY" in msg or "SERVICE KEY" in msg:
+        raise KeyError_(f"인증키 오류 [{code}] {msg}")
+    raise ApiError(f"API 오류 [{code}] {msg}")
+
+
 def _parse(resp: requests.Response) -> tuple[list[dict], int]:
     text = resp.text.strip()
     if text.startswith("<"):
@@ -21,7 +41,7 @@ def _parse(resp: requests.Response) -> tuple[list[dict], int]:
             code = root.findtext(".//returnReasonCode") or root.findtext(".//resultCode") or ""
         except ET.ParseError:
             msg, code = text[:300], ""
-        raise ApiError(f"API 오류 [{code}] {msg}")
+        _raise(code, msg)
     try:
         data = resp.json()
     except ValueError:
@@ -31,7 +51,7 @@ def _parse(resp: requests.Response) -> tuple[list[dict], int]:
     header = r.get("header", {})
     code = str(header.get("resultCode", "00"))
     if code not in ("00", "0", "000"):
-        raise ApiError(f"API 오류 [{code}] {header.get('resultMsg', '')}")
+        _raise(code, str(header.get("resultMsg", "")))
     body = r.get("body", {}) or {}
     items = body.get("items") or []
     if isinstance(items, dict):
@@ -64,20 +84,30 @@ def call(op: str, params: dict, page: int = 1, rows: int | None = None) -> tuple
             last = e
             if isinstance(e, ApiError) and "서버 오류" not in str(e):
                 raise
+            # 타임아웃 등 네트워크 문제는 잠시 후 재시도
             time.sleep(2 * (attempt + 1))
     raise ApiError(f"API 호출 실패: {last}")
 
 
-def call_all(op: str, params: dict, max_pages: int = 50) -> list[dict]:
-    """모든 페이지를 가져옴."""
-    out, page = [], 1
-    while page <= max_pages:
-        items, total = call(op, params, page=page)
+def call_all(op: str, params: dict, max_pages: int = 200) -> list[dict]:
+    """모든 페이지를 가져옴. 큰 numOfRows 가 거부되면 100으로 낮춰 재시도."""
+    rows = _rows_ok.get(op) or load_settings()["num_of_rows"]
+    try:
+        items, total = call(op, params, page=1, rows=rows)
+    except (QuotaError, KeyError_):
+        raise
+    except ApiError:
+        if rows <= 100:
+            raise
+        rows = 100
+        items, total = call(op, params, page=1, rows=rows)
+    _rows_ok[op] = rows
+    out, page = list(items), 2
+    while len(out) < total and items and page <= max_pages:
+        items, total = call(op, params, page=page, rows=rows)
         out.extend(items)
-        if not items or len(out) >= total:
-            break
         page += 1
-        time.sleep(0.2)
+        time.sleep(0.1)
     return out
 
 

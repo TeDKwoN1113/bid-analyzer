@@ -1,96 +1,166 @@
-"""SQLite 데이터베이스 (파일 하나: data/bids.db)."""
-import json
+"""데이터베이스.
+
+- DATABASE_URL 이 설정되어 있으면 그 DB(PostgreSQL, 예: Neon)를 사용 → 데이터가 영구 보관됨
+- 없으면 내 컴퓨터의 SQLite 파일(data/bids.db)을 사용
+"""
 import os
-import sqlite3
+from datetime import datetime
 
-from config import DB_PATH, SAMPLE_DB_PATH
+import pandas as pd
+from sqlalchemy import create_engine, text
 
-_current = {"path": DB_PATH}
+from config import DB_PATH, SAMPLE_DB_PATH, load_settings
+
+_state = {"sample": False}
+_engines: dict = {}
+
+# 테이블: (컬럼 정의, 기본키)
+TABLES = {
+    "bids": ("""
+        bid_key TEXT, bid_no TEXT, bid_ord TEXT,
+        name TEXT, org TEXT, demand_org TEXT, region TEXT, main_type TEXT,
+        method TEXT, contract_method TEXT,
+        notice_dt TEXT, close_dt TEXT, open_dt TEXT,
+        est_price DOUBLE PRECISION, lower_rate DOUBLE PRECISION, url TEXT
+    """, ["bid_key"]),
+    "base_amounts": ("""
+        bid_key TEXT, base_amt DOUBLE PRECISION,
+        range_begin DOUBLE PRECISION, range_end DOUBLE PRECISION, a_value DOUBLE PRECISION
+    """, ["bid_key"]),
+    # 공고별 예정가격 (예비가격 상세에서 추출)
+    "plans": ("""
+        bid_key TEXT, plan_price DOUBLE PRECISION, base_amt DOUBLE PRECISION, open_dt TEXT
+    """, ["bid_key"]),
+    # 복수예비가격 15개
+    "prelim_prices": ("""
+        bid_key TEXT, sno INTEGER, price DOUBLE PRECISION, drawn INTEGER, draw_count INTEGER
+    """, ["bid_key", "sno"]),
+    # 개찰결과 (개찰 직후 공개: 참가업체수, 1순위)
+    "openings": ("""
+        bid_key TEXT, open_dt TEXT, participants INTEGER, status TEXT,
+        first_company TEXT, first_bizno TEXT, first_amt DOUBLE PRECISION, first_rate DOUBLE PRECISION
+    """, ["bid_key"]),
+    # 최종 낙찰자 (적격심사 후 확정)
+    "results": ("""
+        bid_key TEXT, open_dt TEXT, participants INTEGER, winner TEXT, winner_bizno TEXT,
+        win_amt DOUBLE PRECISION, win_rate DOUBLE PRECISION
+    """, ["bid_key"]),
+    # 업체별 개찰순위 (공고별로 받음)
+    "ranks": ("""
+        bid_key TEXT, rank INTEGER, bizno TEXT, company TEXT,
+        amount DOUBLE PRECISION, rate DOUBLE PRECISION, note TEXT
+    """, ["bid_key", "rank", "bizno"]),
+    # 날짜별 수집 완료 기록 (자동 수집/과거 데이터 채우기용)
+    "collect_days": ("""
+        op TEXT, day TEXT, rows INTEGER, done_at TEXT
+    """, ["op", "day"]),
+    "collect_log": ("""
+        run_at TEXT, kind TEXT, period TEXT, count INTEGER, message TEXT
+    """, None),
+}
+INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_bids_open ON bids(open_dt)",
+    "CREATE INDEX IF NOT EXISTS idx_bids_org ON bids(org)",
+    "CREATE INDEX IF NOT EXISTS idx_log_run ON collect_log(run_at)",
+]
 
 
 def use_sample(on: bool) -> None:
     """샘플(연습용) DB와 실제 DB 전환."""
-    _current["path"] = SAMPLE_DB_PATH if on else DB_PATH
+    _state["sample"] = on
 
 
 def is_sample() -> bool:
-    return _current["path"] == SAMPLE_DB_PATH
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS bids (
-    bid_key TEXT PRIMARY KEY,      -- 공고번호-차수
-    bid_no TEXT, bid_ord TEXT,
-    name TEXT,                     -- 공고명
-    org TEXT,                      -- 공고기관
-    demand_org TEXT,               -- 수요기관
-    region TEXT,                   -- 공사현장지역
-    main_type TEXT,                -- 주공종
-    method TEXT,                   -- 낙찰방법
-    notice_dt TEXT, close_dt TEXT, open_dt TEXT,
-    est_price REAL,                -- 추정가격
-    lower_rate REAL,               -- 낙찰하한율(%)
-    url TEXT,
-    raw TEXT
-);
-CREATE TABLE IF NOT EXISTS base_amounts (
-    bid_key TEXT PRIMARY KEY,
-    base_amt REAL,                 -- 기초금액
-    range_begin REAL, range_end REAL,   -- 예가범위(%)
-    a_value REAL,                  -- A값(보험료 등 합계)
-    raw TEXT
-);
-CREATE TABLE IF NOT EXISTS prelim_prices (
-    bid_key TEXT, sno INTEGER,
-    price REAL,                    -- 복수예비가격
-    drawn INTEGER,                 -- 추첨여부
-    draw_count INTEGER,            -- 추첨횟수
-    plan_price REAL,               -- 예정가격
-    base_amt REAL,                 -- 기초금액
-    open_dt TEXT,
-    PRIMARY KEY (bid_key, sno)
-);
-CREATE TABLE IF NOT EXISTS results (
-    bid_key TEXT PRIMARY KEY,
-    open_dt TEXT,
-    participants INTEGER,          -- 참가업체수
-    winner TEXT, winner_bizno TEXT,
-    win_amt REAL, win_rate REAL,   -- 낙찰금액, 낙찰률(%)
-    raw TEXT
-);
-CREATE TABLE IF NOT EXISTS ranks (
-    bid_key TEXT, rank INTEGER,
-    bizno TEXT, company TEXT,
-    amount REAL, rate REAL, note TEXT,
-    PRIMARY KEY (bid_key, rank, bizno)
-);
-CREATE TABLE IF NOT EXISTS collect_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_at TEXT DEFAULT (datetime('now','localtime')),
-    kind TEXT, period TEXT, count INTEGER, message TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_bids_open ON bids(open_dt);
-CREATE INDEX IF NOT EXISTS idx_bids_org ON bids(org);
-"""
+    return _state["sample"]
 
 
-def connect() -> sqlite3.Connection:
-    path = _current["path"]
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    con = sqlite3.connect(path)
-    con.row_factory = sqlite3.Row
-    con.executescript(SCHEMA)
-    return con
+def url() -> str:
+    if _state["sample"]:
+        return f"sqlite:///{SAMPLE_DB_PATH}"
+    u = load_settings().get("database_url") or ""
+    if u:
+        # Neon/Supabase 가 주는 postgres:// 형식도 허용
+        for prefix in ("postgres://", "postgresql://"):
+            if u.startswith(prefix):
+                u = "postgresql+psycopg://" + u[len(prefix):]
+        return u
+    return f"sqlite:///{DB_PATH}"
 
 
-def upsert(con, table: str, row: dict) -> None:
-    cols = list(row.keys())
-    sql = (f"INSERT OR REPLACE INTO {table} ({','.join(cols)}) "
-           f"VALUES ({','.join('?' * len(cols))})")
-    con.execute(sql, [json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v
-                      for v in row.values()])
+def is_remote() -> bool:
+    return not url().startswith("sqlite")
 
 
-def log(con, kind, period, count, message=""):
-    con.execute("INSERT INTO collect_log(kind, period, count, message) VALUES (?,?,?,?)",
-                (kind, period, count, message))
-    con.commit()
+def engine():
+    u = url()
+    if u not in _engines:
+        if u.startswith("sqlite"):
+            os.makedirs(os.path.dirname(u.replace("sqlite:///", "")), exist_ok=True)
+            eng = create_engine(u)
+        else:
+            eng = create_engine(u, pool_pre_ping=True, pool_recycle=300)
+        _init(eng)
+        _engines[u] = eng
+    return _engines[u]
+
+
+def _init(eng) -> None:
+    with eng.begin() as c:
+        for name, (cols, pk) in TABLES.items():
+            pk_sql = f", PRIMARY KEY ({', '.join(pk)})" if pk else ""
+            c.execute(text(f"CREATE TABLE IF NOT EXISTS {name} ({cols}{pk_sql})"))
+        for ix in INDEXES:
+            c.execute(text(ix))
+
+
+def upsert_many(table: str, rows: list[dict]) -> int:
+    """여러 행을 한 번에 저장(같은 키가 있으면 덮어씀)."""
+    if not rows:
+        return 0
+    cols = list(rows[0].keys())
+    pk = TABLES[table][1]
+    ph = ", ".join(f":{c}" for c in cols)
+    if not pk:
+        sql = f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({ph})"
+    elif engine().dialect.name == "sqlite":
+        sql = f"INSERT OR REPLACE INTO {table} ({', '.join(cols)}) VALUES ({ph})"
+    else:
+        upd = ", ".join(f"{c} = EXCLUDED.{c}" for c in cols if c not in pk)
+        sql = (f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({ph}) "
+               f"ON CONFLICT ({', '.join(pk)}) DO " + (f"UPDATE SET {upd}" if upd else "NOTHING"))
+    # 같은 키가 한 묶음에 두 번 있으면 PostgreSQL 이 거부하므로 마지막 값만 남김
+    if pk:
+        dedup = {tuple(r[k] for k in pk): r for r in rows}
+        rows = list(dedup.values())
+    with engine().begin() as c:
+        for i in range(0, len(rows), 1000):
+            c.execute(text(sql), rows[i:i + 1000])
+    return len(rows)
+
+
+def query_df(sql: str, params: dict | None = None) -> pd.DataFrame:
+    with engine().connect() as c:
+        return pd.read_sql_query(text(sql), c, params=params or {})
+
+
+def execute(sql: str, params: dict | None = None) -> None:
+    with engine().begin() as c:
+        c.execute(text(sql), params or {})
+
+
+def now() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def log(kind, period, count, message=""):
+    upsert_many("collect_log", [{"run_at": now(), "kind": kind, "period": period,
+                                 "count": count, "message": message[:1000]}])
+
+
+def done_days(op: str) -> set[str]:
+    df = query_df("SELECT day FROM collect_days WHERE op = :op", {"op": op})
+    return set(df["day"])
+
+
+def mark_day(op: str, day: str, rows: int) -> None:
+    upsert_many("collect_days", [{"op": op, "day": day, "rows": rows, "done_at": now()}])

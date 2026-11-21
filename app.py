@@ -95,7 +95,8 @@ if page == "📋 공고 현황":
 
     q = st.text_input("공고명 검색")
     view = analysis.apply_filters(df, name_query=q) if q else df
-    upcoming = view[view["plan_price"].isna()].sort_values("open_dt")
+    now = pd.Timestamp.now()
+    upcoming = view[view["plan_price"].isna() & (view["open_date"] >= now)].sort_values("open_date")
     st.subheader(f"개찰 전 공고 ({len(upcoming)}건)")
     st.dataframe(upcoming[["bid_key", "name", "org", "region", "base_amt", "lower_rate", "open_dt", "url"]]
                  .rename(columns={"bid_key": "공고번호", "name": "공고명", "org": "공고기관", "region": "지역",
@@ -105,17 +106,17 @@ if page == "📋 공고 현황":
                  column_config={"기초금액": st.column_config.NumberColumn(format="%d"),
                                 "링크": st.column_config.LinkColumn(display_text="열기")})
     st.subheader("개찰 결과")
-    done = view[view["plan_price"].notna()].sort_values("open_dt", ascending=False)
+    done = view[view["plan_price"].notna() | (view["open_date"] < now)].sort_values("open_date", ascending=False)
     st.dataframe(done[["bid_key", "name", "org", "base_amt", "plan_price", "sajung", "participants",
-                       "winner", "win_amt", "winner_sajung", "open_dt"]]
+                       "first_company", "first_amt", "winner_sajung", "open_dt"]]
                  .rename(columns={"bid_key": "공고번호", "name": "공고명", "org": "공고기관",
                                   "base_amt": "기초금액", "plan_price": "예정가격", "sajung": "사정율(%)",
-                                  "participants": "참가수", "winner": "1순위", "win_amt": "낙찰금액",
+                                  "participants": "참가수", "first_company": "1순위", "first_amt": "1순위 금액",
                                   "winner_sajung": "1순위 사정율(%)", "open_dt": "개찰일시"}),
                  use_container_width=True, hide_index=True,
                  column_config={"기초금액": st.column_config.NumberColumn(format="%d"),
                                 "예정가격": st.column_config.NumberColumn(format="%d"),
-                                "낙찰금액": st.column_config.NumberColumn(format="%d"),
+                                "1순위 금액": st.column_config.NumberColumn(format="%d"),
                                 "사정율(%)": st.column_config.NumberColumn(format="%.4f"),
                                 "1순위 사정율(%)": st.column_config.NumberColumn(format="%.4f")})
 
@@ -137,7 +138,8 @@ elif page == "📊 사정율 분석":
     c1.metric("분석 공고 수", f"{len(d):,}건")
     c2.metric("사정율 평균", f"{d['sajung'].mean():.3f}%")
     c3.metric("사정율 중앙값", f"{d['sajung'].median():.3f}%")
-    c4.metric("1순위 사정율 평균", f"{d['winner_sajung'].mean():.3f}%")
+    ws = d["winner_sajung"].mean()
+    c4.metric("1순위 사정율 평균", "-" if pd.isna(ws) else f"{ws:.3f}%")
 
     fig = go.Figure()
     fig.add_histogram(x=d["sajung"], xbins=dict(size=0.1), name="실제 사정율", opacity=0.6)
@@ -179,7 +181,7 @@ elif page == "📊 사정율 분석":
 elif page == "🧮 투찰 계산기":
     st.header("🧮 투찰 계산기")
     need_data()
-    upcoming = df[df["plan_price"].isna()].sort_values("open_dt")
+    upcoming = df[df["plan_price"].isna() & (df["open_date"] >= pd.Timestamp.now())].sort_values("open_date")
     opts = ["(직접 입력)"] + [f"{r.bid_key} | {r.name}" for r in upcoming.itertuples()]
     pick = st.selectbox("개찰 전 공고 선택", opts)
     row = None
@@ -254,20 +256,30 @@ elif page == "⬇️ 데이터 수집":
     if not settings["service_key"]:
         st.error("먼저 '⚙️ 설정' 메뉴에서 API 인증키를 입력하세요.")
         st.stop()
-    st.markdown("공사 입찰공고 · 기초금액 · 낙찰결과 · 예비가격을 날짜별로 받아 저장합니다. "
-                "처음에는 **최근 1개월**로 시작해서 잘 되면 기간을 늘리세요. "
+    if db.is_remote():
+        st.success("데이터는 **영구 저장 DB**에 저장됩니다. 매일 새벽 자동 수집도 이 DB에 쌓입니다.")
+    else:
+        st.warning("영구 저장 DB가 연결되지 않았습니다. 웹사이트에서는 서버가 재시작되면 데이터가 지워질 수 있습니다.")
+    st.subheader("과거 데이터 채우기 현황")
+    st.dataframe(pd.DataFrame(collector.backfill_status()), hide_index=True, use_container_width=True)
+    st.caption("자동 수집이 매일 최근 3일 + 과거 데이터를 조금씩 채웁니다. 목표 날수에 도달하면 1년치 분석이 가능합니다.")
+    st.markdown("---")
+    st.subheader("직접 수집")
+    st.markdown("공사 입찰공고 · 기초금액 · 개찰결과 · 예비가격 · 낙찰자를 날짜별로 받아 저장합니다. "
                 "(공공데이터포털 개발계정은 하루 호출 횟수 제한이 있습니다.)")
     c1, c2 = st.columns(2)
     d1 = c1.date_input("시작일", date.today() - timedelta(days=30))
     d2 = c2.date_input("종료일", date.today())
     jobs = st.multiselect("수집 항목", [j[0] for j in collector.JOBS], [j[0] for j in collector.JOBS],
-                          format_func=lambda k: {j[0]: j[3] for j in collector.JOBS}[k])
+                          format_func=lambda k: collector.LABEL[k])
     if st.button("수집 시작", type="primary"):
         bar = st.progress(0.0)
         res = collector.collect(d1, d2, jobs=jobs, progress=lambda t, p: bar.progress(min(p, 1.0), text=t))
         st.cache_data.clear()
         for label, v in res.items():
-            if v["errors"]:
+            if v["stopped"]:
+                st.error(f"{label}: {v['count']:,}건 저장 후 중단 → {v['stopped']}")
+            elif v["errors"]:
                 st.warning(f"{label}: {v['count']:,}건 저장, 오류 {len(v['errors'])}건 → {v['errors'][0]}")
             else:
                 st.success(f"{label}: {v['count']:,}건 저장")
@@ -284,11 +296,9 @@ elif page == "⬇️ 데이터 수집":
             st.error(str(e))
 
     st.subheader("수집 기록")
-    con = db.connect()
-    st.dataframe(pd.read_sql_query("SELECT run_at 시각, kind 항목, period 기간, count 건수, message 오류 "
-                                   "FROM collect_log ORDER BY id DESC LIMIT 50", con),
+    st.dataframe(db.query_df('SELECT run_at AS "시각", kind AS "항목", period AS "기간", count AS "건수", '
+                             'message AS "메시지" FROM collect_log ORDER BY run_at DESC LIMIT 50'),
                  hide_index=True, use_container_width=True)
-    con.close()
 
 # ---------------- 설정 ----------------
 elif page == "⚙️ 설정 · API 점검":
@@ -312,8 +322,9 @@ elif page == "⚙️ 설정 · API 점검":
     st.header("🔌 API 점검")
     st.caption("API가 정상 응답하는지, 어떤 항목(필드)이 오는지 확인합니다. 문제가 생기면 이 화면 결과를 캡처해 주세요.")
     op = st.selectbox("API 종류", list(OPERATIONS.keys()),
-                      format_func=lambda k: {"bid_list": "입찰공고", "base_amount": "기초금액", "winners": "낙찰자",
-                                             "prelim_prices": "예비가격 상세", "ranks": "개찰순위"}[k])
+                      format_func=lambda k: {"bid_list": "입찰공고", "base_amount": "기초금액", "openings": "개찰결과",
+                                             "winners": "낙찰자", "prelim_prices": "예비가격 상세",
+                                             "ranks": "개찰순위"}[k])
     c1, c2, c3 = st.columns(3)
     div = c1.text_input("inqryDiv", settings["inqry_div_date"].get(op, "1"))
     day = c2.date_input("조회일", date.today() - timedelta(days=1))

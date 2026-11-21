@@ -35,7 +35,11 @@ def build(n_bids: int = 600, seed: int = 7) -> str:
     if os.path.exists(SAMPLE_DB_PATH):
         os.remove(SAMPLE_DB_PATH)
     db.use_sample(True)
-    con = db.connect()
+    db._engines.pop(db.url(), None)  # 파일을 지웠으니 새로 연결
+    T = {k: [] for k in db.TABLES}
+
+    def add(table, row):
+        T[table].append(row)
     rng = np.random.default_rng(seed)
     random.seed(seed)
     start = datetime.now() - timedelta(days=365)
@@ -53,7 +57,7 @@ def build(n_bids: int = 600, seed: int = 7) -> str:
             dt = start + timedelta(days=int(rng.integers(0, 360)), hours=int(rng.integers(9, 17)))
         no = f"R26BK{10000000 + i:08d}"
         key = f"{no}-000"
-        db.upsert(con, "bids", {
+        add("bids", {
             "bid_key": key, "bid_no": no, "bid_ord": "000",
             "name": f"[샘플] {random.choice(['울산', '남구', '중구', '울주', '양산'])} {random.choice(WORKS)}",
             "org": org, "demand_org": org, "region": random.choice(REGIONS),
@@ -61,10 +65,10 @@ def build(n_bids: int = 600, seed: int = 7) -> str:
             "notice_dt": (dt - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S"),
             "close_dt": (dt - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S"),
             "open_dt": dt.strftime("%Y-%m-%d %H:%M:%S"),
-            "est_price": round(base / 1.1), "lower_rate": lr, "url": "", "raw": "{}",
+            "est_price": round(base / 1.1), "lower_rate": lr, "url": "",
         })
-        db.upsert(con, "base_amounts", {"bid_key": key, "base_amt": base, "range_begin": -2,
-                                        "range_end": 2, "a_value": a_val, "raw": "{}"})
+        add("base_amounts", {"bid_key": key, "base_amt": base, "range_begin": -2,
+                             "range_end": 2, "a_value": a_val})
         if upcoming:
             continue
         # 복수예비가격 15개 (기초금액 ±2%)
@@ -72,11 +76,12 @@ def build(n_bids: int = 600, seed: int = 7) -> str:
         prices = np.round(base * (1 + pct / 100))
         drawn = rng.choice(15, 4, replace=False)
         plan = float(np.mean(prices[drawn]).round())
+        add("plans", {"bid_key": key, "plan_price": plan, "base_amt": base,
+                      "open_dt": dt.strftime("%Y-%m-%d %H:%M:%S")})
         for j in range(15):
-            db.upsert(con, "prelim_prices", {
+            add("prelim_prices", {
                 "bid_key": key, "sno": j + 1, "price": float(prices[j]),
                 "drawn": int(j in drawn), "draw_count": int(rng.integers(0, 20)),
-                "plan_price": plan, "base_amt": base, "open_dt": dt.strftime("%Y-%m-%d %H:%M:%S"),
             })
         # 입찰 참가자 투찰
         n = int(rng.integers(80, 900))
@@ -88,19 +93,18 @@ def build(n_bids: int = 600, seed: int = 7) -> str:
         if len(valid) == 0:
             continue
         win = float(valid[0])
-        db.upsert(con, "results", {
+        add("openings", {
             "bid_key": key, "open_dt": dt.strftime("%Y-%m-%d %H:%M:%S"), "participants": n,
-            "winner": comp[0], "winner_bizno": "000-00-00000", "win_amt": win,
-            "win_rate": round(win / plan * 100, 3), "raw": "{}",
+            "status": "개찰완료", "first_company": comp[0], "first_bizno": "000-00-00000",
+            "first_amt": win, "first_rate": round(win / plan * 100, 3),
         })
         if i % 3 == 0:  # 일부 공고만 개찰순위
             for rank, amt in enumerate(valid[: len(comp)], start=1):
                 c = comp[rank - 1]
-                db.upsert(con, "ranks", {"bid_key": key, "rank": rank, "bizno": c, "company": c,
-                                         "amount": float(amt), "rate": round(amt / plan * 100, 3),
-                                         "note": ""})
-    con.commit()
-    con.close()
+                add("ranks", {"bid_key": key, "rank": rank, "bizno": c, "company": c,
+                              "amount": float(amt), "rate": round(amt / plan * 100, 3), "note": ""})
+    for table, rows in T.items():
+        db.upsert_many(table, rows)
     return SAMPLE_DB_PATH
 
 
