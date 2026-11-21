@@ -19,8 +19,8 @@ def load_dataset() -> pd.DataFrame:
                ba.base_amt AS base_amt_notice, ba.a_value, ba.range_begin, ba.range_end,
                ba.a_apply, ba.pure_cost, ba.a_detail,
                p.plan_price, p.base_amt AS base_amt_open,
-               o.participants AS participants_open, o.status, o.first_company, o.first_amt,
-               r.participants AS participants_final, r.winner, r.win_amt, r.win_rate
+               o.participants AS participants_open, o.status, o.first_company, o.first_amt, o.first_bizno,
+               r.participants AS participants_final, r.winner, r.win_amt, r.win_rate, r.winner_bizno
         FROM bids b
         LEFT JOIN base_amounts ba ON ba.bid_key = b.bid_key
         LEFT JOIN plans p ON p.bid_key = b.bid_key
@@ -46,16 +46,26 @@ def load_dataset() -> pd.DataFrame:
     # 1순위 = 개찰 1순위(개찰 직후 공개), 없으면 최종 낙찰자
     df["first_company"] = df["first_company"].fillna(df["winner"])
     df["first_amt"] = df["first_amt"].fillna(df["win_amt"])
+    # 낙찰 기준 금액: 적격심사에서 1순위가 탈락하면 2·3순위가 낙찰되므로, 최종 낙찰자 금액이 있으면 그것을 사용
+    # (최종 낙찰자가 1순위보다 낮을 수는 없으므로 그런 데이터는 무시)
+    final_ok = df["win_amt"].notna() & (df["first_amt"].isna() | (df["win_amt"] >= df["first_amt"] * 0.9999))
+    df["win_ref_amt"] = df["win_amt"].where(final_ok, df["first_amt"])
+    fb = df["first_bizno"].fillna("").astype(str).str.replace("-", "")
+    wb = df["winner_bizno"].fillna("").astype(str).str.replace("-", "")
+    df["first_won"] = np.where((fb != "") & (wb != ""), (fb == wb).astype(float), np.nan)
     # 사정율(%) = 예정가격 / 기초금액
     df["sajung"] = df["plan_price"] / df["base_amt"] * 100
-    # 1순위(낙찰자) 사정율: 낙찰자가 '노린' 사정율 = 낙찰금액을 하한율로 역산한 예정가격 / 기초금액
+    # 낙찰자 사정율: 낙찰자가 '노린' 사정율 = 낙찰금액을 하한율로 역산한 예정가격 / 기초금액
     r = df["lower_rate"] / 100
-    implied_plan = (df["first_amt"] - df["a_value"]) / r + df["a_value"]
+    implied_plan = (df["win_ref_amt"] - df["a_value"]) / r + df["a_value"]
     df["winner_sajung"] = implied_plan / df["base_amt"] * 100
+    implied_first = (df["first_amt"] - df["a_value"]) / r + df["a_value"]
+    df["first_sajung"] = implied_first / df["base_amt"] * 100
     df["open_date"] = pd.to_datetime(df["open_dt"], errors="coerce", format="mixed")
     # 이상치 제거 (데이터 오류 방지)
     df.loc[(df["sajung"] < 90) | (df["sajung"] > 110), "sajung"] = np.nan
     df.loc[(df["winner_sajung"] < 90) | (df["winner_sajung"] > 110), "winner_sajung"] = np.nan
+    df.loc[(df["first_sajung"] < 90) | (df["first_sajung"] > 110), "first_sajung"] = np.nan
     return df
 
 
@@ -299,9 +309,9 @@ def evidence(hist: pd.DataFrame, s_: float, n_examples: int = 3) -> dict:
         if s_ < r["sajung"]:
             res = "하한 미달"
         elif s_ < r["winner_sajung"]:
-            res = "🏆 1순위"
+            res = "🏆 낙찰"
         else:
-            res = "1순위보다 높음"
+            res = "낙찰자보다 높음"
         examples.append({"공고명": r["name"], "개찰일": r["open_date"].strftime("%m/%d") if pd.notna(r["open_date"]) else "-",
                          "실제": r["sajung"], "1순위": r["winner_sajung"], "결과": res})
     return {
@@ -381,6 +391,21 @@ def blend(tier_list) -> tuple[pd.DataFrame, list[float]]:
     return curve.assign(낙찰확률=p.round(3)), weights
 
 
+def qual_check(row) -> tuple[bool | None, str]:
+    """적격심사 자가진단 (회사가 등록한 '통과 가능한 최대 추정가격' 기준의 간이 판정)."""
+    lim = db.get_kv("qual_max_est")
+    try:
+        lim = float(lim) * 1e8 if lim not in (None, "") else None
+    except ValueError:
+        lim = None
+    est = row.get("est_price")
+    if lim is None or est is None or pd.isna(est):
+        return None, ""
+    if est <= lim:
+        return True, "적격심사 통과 가능 금액대"
+    return False, f"추정가격 {est / 1e8:,.1f}억 > 우리 통과 가능 {lim / 1e8:,.1f}억 → 1순위여도 심사 탈락 위험"
+
+
 PURE_COST_RATE = 0.98  # 적격심사: 투찰금액이 순공사원가의 98% 미만이면 낙찰 제외
 
 
@@ -443,7 +468,14 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True) -> d
         conf = "보통"
     else:
         conf = "낮음"
+    near = closest if len(closest) >= 10 else tl[0][1]
+    pp = near["participants"].dropna()
+    pp = pp[pp > 0]
+    fw = near["first_won"].dropna() if "first_won" in near else pd.Series(dtype=float)
     return {
+        "예상 참가": int(pp.median()) if len(pp) else None,
+        "1순위 낙찰률": float(fw.mean() * 100) if len(fw) >= 10 else None,
+        "적격심사": qual_check(row),
         "사정율": s_, "투찰금액": bid_amount(base, s_, lr, a_val), "신뢰도": conf,
         "근거": steps[-1]["이름"], "낙찰확률": round(picks[0]["낙찰확률"], 2), "무작위 대비": times,
         "후보": [(round(x["사정율"], 2), bid_amount(base, round(x["사정율"], 2), lr, a_val), round(x["낙찰확률"], 2))
@@ -458,7 +490,7 @@ def evidence_lines(pk: dict) -> list[str]:
     out = []
     steps = pk.get("단계") or []
     for st_ in reversed(steps):  # 가까운 단계부터
-        out.append(f"{st_['이름']} 과거 {st_['n']}건: 이 사정율이면 {st_['wins']}건 1순위, {st_['low']}건 하한 미달")
+        out.append(f"{st_['이름']} 과거 {st_['n']}건: 이 사정율이면 {st_['wins']}건 낙찰, {st_['low']}건 하한 미달")
     if len(steps) > 1:
         out.append("반영 비중: " + " · ".join(f"{x['이름'].split('(')[0]} {x['비중'] * 100:.0f}%" for x in reversed(steps)))
     elif not steps:
@@ -466,6 +498,9 @@ def evidence_lines(pk: dict) -> list[str]:
         out.append(f"비교 대상: 과거 공고 {e['n']}건 (데이터 부족)")
     if pk.get("무작위 대비"):
         out.append(f"과거 낙찰확률 {pk['낙찰확률']}% = 아무렇게나 넣을 때의 {pk['무작위 대비']:.1f}배")
+    if pk.get("1순위 낙찰률") is not None:
+        out.append(f"비슷한 공고에서 개찰 1순위가 그대로 낙찰된 비율 {pk['1순위 낙찰률']:.0f}% "
+                   "(나머지는 1순위 심사 탈락 → 다음 순위 낙찰, 계산에 반영됨)")
     if pk.get("순공사원가 하한"):
         out.append(f"순공사원가 98% 기준: {pk['순공사원가 하한']:,}원 이상 (사정율 {pk['순공사원가 사정율']:.2f}% 이상) → 반영됨")
     e = pk["근거상세"]
@@ -497,11 +532,19 @@ def my_bids_view(df: pd.DataFrame) -> pd.DataFrame:
     v["amount"] = v["amount"].fillna(calc_amt)
     floor = (v["plan_price"] - a) * r + a
 
+    ours = db.company()["bizno"]
+
     def judge(x, fl):
         if pd.isna(x["plan_price"]) and pd.isna(x["first_amt"]):
             return "개찰 전" if pd.isna(x["open_date"]) or x["open_date"] > pd.Timestamp.now() else "결과 대기"
         if pd.notna(fl) and pd.notna(x["amount"]) and x["amount"] < fl:
             return "하한 미달"
+        wb = str(x.get("winner_bizno") or "").replace("-", "")
+        if ours and wb:
+            if wb == ours:
+                return "🏆 낙찰"
+            if pd.notna(x["my_rank"]) and x["my_rank"] == 1:
+                return "1순위였으나 낙찰 실패(심사 탈락 추정)"
         if pd.notna(x["my_rank"]) and x["my_rank"] == 1:
             return "🏆 1순위"
         if pd.notna(x["first_amt"]) and pd.notna(x["amount"]) and x["amount"] <= x["first_amt"]:

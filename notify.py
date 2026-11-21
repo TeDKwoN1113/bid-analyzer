@@ -158,6 +158,9 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
             pk = analysis.pick_bid(df, r, analysis.bid_keywords(r))
             if pk:
                 badge = {"높음": "🟢", "보통": "🟡", "낮음": "🔴"}[pk["신뢰도"]]
+                qok, qmsg = pk.get("적격심사") or (None, "")
+                if qok is False:
+                    line += f"\n  ⚠️ {_e(qmsg)}"
                 line += (f"\n  💰 투찰금액 <b>{pk['투찰금액']:,}원</b>"
                          f"\n     사정율 {pk['사정율']:.2f}% · 신뢰도 {badge}{pk['신뢰도']}"
                          + "".join(f"\n     · {_e(x)}" for x in analysis.evidence_lines(pk)[:4]))

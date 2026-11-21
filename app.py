@@ -205,6 +205,18 @@ if page == "🏠 오늘의 투찰":
         d = (t.normalize() - now.normalize()).days
         return "오늘 마감" if d == 0 else f"D-{d}"
 
+    # 기초금액 공개 공고는 미리 투찰금액·낙찰확률 계산 (정렬용)
+    picks = {}
+    for _, r in todo.head(80).iterrows():
+        if pd.notna(r["base_amt_notice"]) and pd.notna(r["lower_rate"]):
+            picks[r["bid_key"]] = analysis.pick_bid(raw, r, analysis.bid_keywords(r, sel_lics or _lics))
+    order = st.radio("정렬", ["마감 임박순", "낙찰확률 높은순"], horizontal=True, label_visibility="collapsed")
+    if order == "낙찰확률 높은순":
+        todo = todo.assign(_p=todo["bid_key"].map(lambda k: (picks.get(k) or {}).get("낙찰확률") or -1))
+        todo = todo.sort_values(["_p", "마감기준"], ascending=[False, True])
+        st.caption("기초금액이 공개되어 투찰금액을 계산할 수 있는 공고부터, 과거 낙찰확률이 높은 순서입니다. "
+                   "참가업체가 적은 공고일수록 확률이 높습니다.")
+
     for _, r in todo.head(40).iterrows():
         with st.container(border=True):
             top = st.columns([5, 1])
@@ -227,18 +239,27 @@ if page == "🏠 오늘의 투찰":
             if pd.isna(r["lower_rate"]):
                 st.warning("하한율 정보가 없어 투찰금액을 계산할 수 없습니다. 공고문을 확인하세요.")
                 continue
-            pk = analysis.pick_bid(raw, r, analysis.bid_keywords(r, sel_lics or _lics))
+            pk = picks.get(r["bid_key"]) or analysis.pick_bid(raw, r, analysis.bid_keywords(r, sel_lics or _lics))
             if not pk:
                 st.caption("투찰금액을 계산할 수 없습니다.")
                 continue
             badge = {"높음": "🟢", "보통": "🟡", "낮음": "🔴"}[pk["신뢰도"]]
             st.metric("💰 투찰금액", f"{pk['투찰금액']:,}원")
-            st.caption(f"사정율 {pk['사정율']:.2f}% · 신뢰도 {badge} {pk['신뢰도']}")
+            extra = []
+            if pk.get("낙찰확률") is not None:
+                extra.append(f"낙찰확률 {pk['낙찰확률']}%")
+            if pk.get("예상 참가"):
+                extra.append(f"예상 참가 약 {pk['예상 참가']:,}곳")
+            st.caption(f"사정율 {pk['사정율']:.2f}% · 신뢰도 {badge} {pk['신뢰도']}"
+                       + ("".join(" · " + x for x in extra)))
+            qok, qmsg = pk.get("적격심사") or (None, "")
+            if qok is False:
+                st.warning("⚠️ " + qmsg)
             st.markdown("**📌 근거**  \n" + "  \n".join("• " + x for x in analysis.evidence_lines(pk)))
             ex = pk["근거상세"]["examples"]
             if ex:
                 st.markdown("최근 비슷한 공고에 이 사정율로 넣었다면  \n" + "  \n".join(
-                    f"– {x['공고명'][:28]} ({x['개찰일']}): 실제 {x['실제']:.2f} / 1순위 {x['1순위']:.2f} → **{x['결과']}**"
+                    f"– {x['공고명'][:28]} ({x['개찰일']}): 실제 {x['실제']:.2f} / 낙찰자 {x['1순위']:.2f} → **{x['결과']}**"
                     for x in ex))
             with st.expander("다른 후보 · 신뢰도 기준"):
                 for s_, a_, p_ in pk["후보"][1:]:
@@ -674,7 +695,12 @@ elif page == "⚙️ 설정 · API 점검":
     cbiz = cc2.text_input("사업자번호 (개찰순위에서 우리 순위 찾기용, 숫자 10자리)", company["bizno"])
     creg = cc1.text_input("소재지 (참가가능지역 판단, 예: 울산)", company["region"])
     clic = cc2.text_input("보유 면허 (쉼표 구분, 예: 전기공사업, 정보통신공사업)", ", ".join(company["licenses"]))
+    qlim = st.text_input("적격심사 통과 가능한 최대 추정가격(억원, 비우면 판정 안 함)",
+                         db.get_kv("qual_max_est", "") or "",
+                         help="시공능력·실적·경영상태 등을 고려해 '이 금액까지는 수행능력 만점(심사 통과)'인 추정가격. "
+                              "넘는 공고에는 경고가 붙습니다.")
     if st.button("회사 정보 저장"):
+        db.set_kv("qual_max_est", qlim.strip())
         db.set_kv("company_name", cname.strip())
         db.set_kv("company_bizno", cbiz.strip().replace("-", ""))
         db.set_kv("company_region", creg.strip())

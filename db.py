@@ -212,13 +212,26 @@ def mark_day(op: str, day: str, rows: int) -> None:
     upsert_many("collect_days", [{"op": op, "day": day, "rows": rows, "done_at": now()}])
 
 
+_kv_cache: dict = {}
+
+
 def get_kv(k: str, default=None):
-    df = query_df("SELECT v FROM kv WHERE k = :k", {"k": k})
-    return df["v"].iloc[0] if len(df) else default
+    """설정값 읽기 (원격 DB 왕복을 줄이려고 30초 캐시)."""
+    import time
+    key = (url(), k)
+    hit = _kv_cache.get(key)
+    if hit and time.time() - hit[0] < 30:
+        v = hit[1]
+    else:
+        df = query_df("SELECT v FROM kv WHERE k = :k", {"k": k})
+        v = df["v"].iloc[0] if len(df) else None
+        _kv_cache[key] = (time.time(), v)
+    return default if v is None else v
 
 
 def set_kv(k: str, v: str) -> None:
     upsert_many("kv", [{"k": k, "v": v}])
+    _kv_cache.pop((url(), k), None)
 
 
 def company() -> dict:
