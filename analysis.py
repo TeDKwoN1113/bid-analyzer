@@ -313,79 +313,135 @@ def evidence(hist: pd.DataFrame, s_: float, n_examples: int = 3) -> dict:
     }
 
 
-PRIOR_WEIGHT = 100  # 업종 전체 데이터를 '가상의 100건'만큼 섞음 (기관 데이터가 많을수록 기관 비중↑)
+PRIOR_WEIGHT = 100  # 상위 단계 데이터를 '가상의 100건'만큼 섞음 (하위 단계 데이터가 많을수록 하위 비중↑)
 
 
-def pick_bid(df: pd.DataFrame, row, keywords=None) -> dict | None:
+def _band(h: pd.DataFrame, base, min_n: int) -> pd.DataFrame:
+    """기초금액 ±50% 공고가 충분하면 그것만, 아니면 전체."""
+    if pd.notna(base) and base > 0:
+        b = h[(h["base_amt"] >= base * 0.5) & (h["base_amt"] <= base * 1.5)]
+        if len(win_windows(b)) >= min_n:
+            return b
+    return h
+
+
+def is_local_bid(row, region: str | None = None) -> bool:
+    """우리 지역(울산) 지역제한 공고인지."""
+    reg = region if region is not None else db.company()["region"]
+    if not reg:
+        return False
+    allowed = str(row.get("allowed_regions", "") or "")
+    if allowed:
+        return reg in allowed
+    if row.get("allowed_regions_known", False):
+        return False  # 지역제한 없음(전국 공고)
+    place = f"{row.get('region', '')} {row.get('org', '')} {row.get('demand_org', '')}"
+    return reg in place
+
+
+def local_region_history(done: pd.DataFrame, region: str) -> pd.DataFrame:
+    """우리 지역 지역제한 공고 (지역 정보를 아직 못 받은 공고는 공사지역·기관명으로 판단)."""
+    allowed = done["allowed_regions"] if "allowed_regions" in done else pd.Series("", index=done.index)
+    known = done["allowed_regions_known"] if "allowed_regions_known" in done else pd.Series(False, index=done.index)
+    place = done["region"].fillna("") + " " + done["org"].fillna("") + " " + done["demand_org"].fillna("")
+    m = allowed.str.contains(region, regex=False) | (~known & (allowed == "") & place.str.contains(region, regex=False))
+    return done[m]
+
+
+def tiers(df: pd.DataFrame, row, keywords=None) -> list[tuple[str, pd.DataFrame]]:
+    """비교 단계: [전국, (우리 지역), (같은 기관)] — 넓은 것부터."""
+    done = df[df["sajung"].notna()]
+    region = db.company()["region"]
+    ind = apply_filters(done, keywords=keywords) if keywords else done
+    if len(win_windows(ind)) < 30:
+        ind = done
+    out = [("전국 같은 업종", _band(ind, row["base_amt"], 200))]
+    if region and is_local_bid(row, region):
+        loc = local_region_history(ind, region)
+        if len(win_windows(loc)):
+            out.append((f"{region} 지역제한 공고", _band(loc, row["base_amt"], 100)))
+    org = ind[ind["org"] == row["org"]]
+    if len(win_windows(org)) >= 5:
+        out.append((f"같은 기관({row['org']})", org))
+    return out
+
+
+def blend(tier_list) -> tuple[pd.DataFrame, list[float]]:
+    """넓은 단계부터 차례로 섞기: p = (n·p_하위 + 100·p_상위) / (n + 100). 각 단계 반영 비중도 반환."""
+    curve = win_curve(tier_list[0][1])
+    p = curve["낙찰확률"].fillna(0)
+    weights = [1.0]
+    for _, h in tier_list[1:]:
+        n = len(win_windows(h))
+        c = win_curve(h)["낙찰확률"].fillna(0)
+        w = n / (n + PRIOR_WEIGHT)
+        p = w * c + (1 - w) * p
+        weights = [x * (1 - w) for x in weights] + [w]
+    return curve.assign(낙찰확률=p.round(3)), weights
+
+
+def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True) -> dict | None:
     """공고 하나에 대한 최종 투찰금액 1개와 근거.
 
-    낙찰확률 = (가까운 데이터[같은 기관 또는 비슷한 금액] + 업종 전체 데이터)를 섞어서 계산.
-      p = (n_local × p_local + 100 × p_업종전체) / (n_local + 100)
-    가까운 데이터가 많을수록 그 성향을 더 따르고, 적으면 업종 전체를 따른다.
+    단계별로 섞어서 낙찰확률 계산: 전국 같은 업종 → (우리 지역 지역제한 공고) → (같은 기관)
+    하위 단계 데이터가 많을수록 그 단계 성향을 더 따르고, 적으면 상위 단계를 따른다.
+    울산 지역제한 공고에는 울산 업체만 들어오므로 울산 단계가 중요하고,
+    전국 공고(지역제한 없음)에는 울산 단계를 쓰지 않는다.
     """
     base, lr = row["base_amt"], row["lower_rate"]
     if pd.isna(base) or pd.isna(lr) or base <= 0:
         return None
     a_val = row["a_value"] or 0
     done = df[df["sajung"].notna()]
-    broad = apply_filters(done, keywords=keywords) if keywords else done
-    if len(win_windows(broad)) < 30:
-        broad = done
-    local = similar_history(df, row, keywords)
-    n_b, n_l = len(win_windows(broad)), len(win_windows(local))
-    if n_b < 5:
+    tl = tiers(df, row, keywords)
+    if not use_region:
+        tl = [t for t in tl if "지역제한" not in t[0]]
+    if len(win_windows(tl[0][1])) < 5:
         s_ = float(done["sajung"].median()) if len(done) else 100.0
         return {"사정율": round(s_, 2), "투찰금액": bid_amount(base, s_, lr, a_val), "신뢰도": "낮음",
-                "비교 공고": len(done), "근거": "과거 사정율 중앙값(데이터 부족)", "낙찰확률": None,
-                "무작위 대비": None, "후보": [], "근거상세": evidence(done, round(s_, 2)), "근거_넓은": None}
-    cb = win_curve(broad)
-    cl = win_curve(local) if n_l else cb
-    mix = (n_l * cl["낙찰확률"].fillna(0) + PRIOR_WEIGHT * cb["낙찰확률"].fillna(0)) / (n_l + PRIOR_WEIGHT)
-    curve = cb.assign(낙찰확률=mix.round(3))
+                "근거": "과거 사정율 중앙값(데이터 부족)", "낙찰확률": None, "무작위 대비": None, "후보": [],
+                "단계": [], "근거상세": evidence(done, round(s_, 2))}
+    curve, weights = blend(tl)
     picks = best_points(curve, top=3)
-    best = picks[0]
-    s_ = round(best["사정율"], 2)
-    same_org = n_l and (local["org"] == row["org"]).all()
-    basis = f"같은 기관({row['org']})" if same_org else "같은 업종·비슷한 금액"
-    ev_l = evidence(local, s_) if n_l else None
-    ev_b = evidence(broad, s_)
-    bp = baseline_prob(broad)
-    times = best["낙찰확률"] / bp if bp else None
-    wins_total = (ev_l["wins"] if ev_l else 0) + ev_b["wins"]
-    if n_l >= 30 and ev_b["wins"] >= 5 and (times or 0) >= 2:
+    s_ = round(picks[0]["사정율"], 2)
+    steps = [{"이름": name, "비중": w, **evidence(h, s_)} for (name, h), w in zip(tl, weights)]
+    nat = steps[0]
+    closest = tl[-1][1]
+    bp = baseline_prob(closest if len(closest) >= 10 else tl[0][1])
+    times = picks[0]["낙찰확률"] / bp if bp else None
+    n_close = sum(st_["n"] for st_ in steps[1:])
+    if n_close >= 30 and nat["wins"] >= 5 and (times or 0) >= 2:
         conf = "높음"
-    elif ev_b["wins"] >= 3 and (times or 0) >= 1.5:
+    elif nat["wins"] >= 3 and (times or 0) >= 1.5:
         conf = "보통"
     else:
         conf = "낮음"
     return {
         "사정율": s_, "투찰금액": bid_amount(base, s_, lr, a_val), "신뢰도": conf,
-        "비교 공고": n_l, "근거": basis, "낙찰확률": round(best["낙찰확률"], 2), "무작위 대비": times,
+        "근거": steps[-1]["이름"], "낙찰확률": round(picks[0]["낙찰확률"], 2), "무작위 대비": times,
         "후보": [(round(x["사정율"], 2), bid_amount(base, round(x["사정율"], 2), lr, a_val), round(x["낙찰확률"], 2))
                for x in picks],
-        "근거상세": ev_l or ev_b, "근거_넓은": ev_b, "가까운 비중": n_l / (n_l + PRIOR_WEIGHT),
+        "단계": steps, "근거상세": steps[-1],
     }
 
 
 def evidence_lines(pk: dict) -> list[str]:
     """근거를 사람이 읽는 문장으로 (화면·알림 공용, HTML 없음)."""
-    e, eb = pk["근거상세"], pk.get("근거_넓은")
     out = []
-    if eb is not None and e is not eb and e["n"]:
-        out.append(f"{pk['근거']} 과거 {e['n']}건: 이 사정율이면 {e['wins']}건 1순위, "
-                   f"{e['low']}건 하한 미달")
-        out.append(f"같은 업종 전체 {eb['n']}건: 이 사정율이면 {eb['wins']}건 1순위, "
-                   f"{eb['low']}건 하한 미달")
-        out.append(f"반영 비중: {pk['근거']} {pk['가까운 비중'] * 100:.0f}% · 업종 전체 "
-                   f"{100 - pk['가까운 비중'] * 100:.0f}%")
-    else:
-        b = eb or e
-        out.append(f"비교 대상: 과거 공고 {b['n']}건 — 이 사정율이면 {b['wins']}건 1순위, {b['low']}건 하한 미달")
+    steps = pk.get("단계") or []
+    for st_ in reversed(steps):  # 가까운 단계부터
+        out.append(f"{st_['이름']} 과거 {st_['n']}건: 이 사정율이면 {st_['wins']}건 1순위, {st_['low']}건 하한 미달")
+    if len(steps) > 1:
+        out.append("반영 비중: " + " · ".join(f"{x['이름'].split('(')[0]} {x['비중'] * 100:.0f}%" for x in reversed(steps)))
+    elif not steps:
+        e = pk["근거상세"]
+        out.append(f"비교 대상: 과거 공고 {e['n']}건 (데이터 부족)")
     if pk.get("무작위 대비"):
         out.append(f"과거 낙찰확률 {pk['낙찰확률']}% = 아무렇게나 넣을 때의 {pk['무작위 대비']:.1f}배")
-    if e["median"] is not None:
-        out.append(f"{'이 기관' if pk['근거'].startswith('같은 기관') else '비교 공고'} 실제 사정율: "
-                   f"보통 {e['q25']:.2f} ~ {e['q75']:.2f}% (중앙 {e['median']:.2f}%)")
+    e = pk["근거상세"]
+    if e.get("median") is not None:
+        out.append(f"{e.get('이름', '비교 공고')} 실제 사정율: 보통 {e['q25']:.2f} ~ {e['q75']:.2f}% "
+                   f"(중앙 {e['median']:.2f}%)")
     return out
 
 
@@ -495,25 +551,22 @@ def _pick_from_curve(curve: pd.DataFrame) -> float | None:
 def strategy_picks(hist: pd.DataFrame, row, keywords) -> dict:
     """같은 과거 데이터로 여러 방식의 사정율 선택."""
     done = hist[hist["sajung"].notna()]
-    broad = apply_filters(done, keywords=keywords) if keywords else done
-    if len(win_windows(broad)) < 30:
-        broad = done
-    local = similar_history(hist, row, keywords)
-    n_l = len(win_windows(local))
+    tl = tiers(hist, row, keywords)
     out = {}
-    if len(win_windows(broad)) < 5:
+    if len(win_windows(tl[0][1])) < 5:
         return out
-    cb = win_curve(broad)
-    cl = win_curve(local) if n_l else cb
-    mix = (n_l * cl["낙찰확률"].fillna(0) + PRIOR_WEIGHT * cb["낙찰확률"].fillna(0)) / (n_l + PRIOR_WEIGHT)
-    out["① 현재 방식 (기관+업종 혼합)"] = _pick_from_curve(cb.assign(낙찰확률=mix))
-    out["② 업종 전체만"] = _pick_from_curve(cb)
-    if n_l >= 5:
-        out["③ 같은 기관/비슷한 금액만"] = _pick_from_curve(cl)
-    out["④ 단순 평균 (사정율 평균)"] = round(float(broad["sajung"].mean()), 2)
-    w = broad["winner_sajung"].dropna()
+    out["① 현재 방식 (기관+울산+전국)"] = _pick_from_curve(blend(tl)[0])
+    no_reg = [t for t in tl if "지역제한" not in t[0]]
+    if len(no_reg) != len(tl):
+        out["② 울산 단계 없이 (기관+전국)"] = _pick_from_curve(blend(no_reg)[0])
+    out["③ 전국 같은 업종만"] = _pick_from_curve(win_curve(tl[0][1]))
+    reg = [t for t in tl if "지역제한" in t[0]]
+    if reg and len(win_windows(reg[0][1])) >= 5:
+        out["④ 울산 지역제한 공고만"] = _pick_from_curve(win_curve(reg[0][1]))
+    out["⑤ 단순 평균 (사정율 평균)"] = round(float(tl[0][1]["sajung"].mean()), 2)
+    w = tl[0][1]["winner_sajung"].dropna()
     if len(w):
-        out["⑤ 과거 1순위 사정율 평균"] = round(float(w.mean()), 2)
+        out["⑥ 과거 1순위 사정율 평균"] = round(float(w.mean()), 2)
     return out
 
 
