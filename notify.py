@@ -193,6 +193,22 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
             keys.append((r["bid_key"], "result"))
         parts.append("\n".join(lines))
 
+    # 4) 우리 투찰 결과
+    mb = analysis.my_bids_view(df)
+    if not mb.empty:
+        mb = mb[~mb["결과"].isin(["개찰 전", "결과 대기"]) & (mb["open_date"] >= now - pd.Timedelta(days=3))]
+        mb = mb[~mb["bid_key"].map(lambda k: (k, "mine") in done).astype(bool)]
+        if len(mb):
+            lines = [f"📝 <b>우리 투찰 결과 {len(mb)}건</b>"]
+            for _, r in mb.iterrows():
+                us = "-" if pd.isna(r["sajung"]) else f"{r['sajung']:.3f}%"
+                act = "-" if pd.isna(r["sajung_bid"]) else f"{r['sajung_bid']:.3f}%"
+                win = "-" if pd.isna(r["winner_sajung"]) else f"{r['winner_sajung']:.3f}%"
+                lines.append(f"• {_title(r)}\n  결과 <b>{_e(r['결과'])}</b> | 우리 {_won(r['amount'])} ({us})\n"
+                             f"  실제 사정율 {act} | 1순위 {_e(r['first_company'])} ({win})")
+                keys.append((r["bid_key"], "mine"))
+            parts.insert(0, "\n".join(lines))
+
     if not parts:
         return "", []
     footer = f'🔗 <a href="{html.escape(s["app_url"])}">입찰 분석기 열기</a>'

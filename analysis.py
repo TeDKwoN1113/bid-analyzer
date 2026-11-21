@@ -66,9 +66,9 @@ def eligible(df: pd.DataFrame, company_region: str | None = None,
       아직 지역 정보를 못 받은 공고는 공사지역·기관명에 우리 지역이 있으면 가능으로 봄.
     - 면허: 면허제한이 확인되고 값이 있으면 우리 면허가 포함돼야 가능.
     """
-    s = load_settings()
-    reg = company_region if company_region is not None else s["company_region"]
-    lic = company_licenses if company_licenses is not None else s["company_licenses"]
+    c = db.company()
+    reg = company_region if company_region is not None else c["region"]
+    lic = company_licenses if company_licenses is not None else c["licenses"]
     ok = pd.Series(True, index=df.index)
     if reg and "allowed_regions" in df:
         known = df["allowed_regions_known"]
@@ -266,6 +266,43 @@ def competitor_stats(ranks: pd.DataFrame, min_count: int = 2) -> pd.DataFrame:
     agg["최근 참가"] = agg["최근 참가"].dt.strftime("%Y-%m-%d")
     agg = agg[agg["참가"] >= min_count]
     return agg.sort_values(["1순위", "10위내", "참가"], ascending=False).round(3)
+
+
+def my_bids_view(df: pd.DataFrame) -> pd.DataFrame:
+    """우리 투찰 기록 + 공고 결과 + 판정."""
+    mb = db.query_df("SELECT * FROM my_bids")
+    if mb.empty:
+        return mb
+    v = mb.merge(df, on="bid_key", how="left", suffixes=("", "_bid"))
+    a = v["a_value"].fillna(0)
+    r = v["lower_rate"] / 100
+    # 금액만 적었으면 사정율 역산, 사정율만 적었으면 금액 계산
+    calc_s = ((v["amount"] - a) / r + a) / v["base_amt"] * 100
+    v["sajung"] = v["sajung"].fillna(calc_s)
+    calc_amt = np.ceil((v["base_amt"] * v["sajung"] / 100 - a) * r + a)
+    v["amount"] = v["amount"].fillna(calc_amt)
+    floor = (v["plan_price"] - a) * r + a
+
+    def judge(x, fl):
+        if pd.isna(x["plan_price"]) and pd.isna(x["first_amt"]):
+            return "개찰 전" if pd.isna(x["open_date"]) or x["open_date"] > pd.Timestamp.now() else "결과 대기"
+        if pd.notna(fl) and pd.notna(x["amount"]) and x["amount"] < fl:
+            return "하한 미달"
+        if pd.notna(x["my_rank"]) and x["my_rank"] == 1:
+            return "🏆 1순위"
+        if pd.notna(x["first_amt"]) and pd.notna(x["amount"]) and x["amount"] <= x["first_amt"]:
+            return "🏆 1순위"
+        if pd.notna(x["my_rank"]) and x["my_rank"] > 0:
+            return f"{int(x['my_rank'])}위"
+        if pd.notna(x["first_amt"]) and pd.notna(x["amount"]) and x["amount"] > x["first_amt"]:
+            return "1순위보다 높음"
+        return "순위 확인 중"
+    v["결과"] = [judge(x, fl) for (_, x), fl in zip(v.iterrows(), floor)]
+    # 낙찰 구간 대비 우리 위치: + 면 너무 높게(1순위보다 비쌈), - 면 너무 낮게(하한 미달)
+    v["낙찰구간"] = [
+        "-" if pd.isna(lo) or pd.isna(hi) else f"{lo:.3f} ~ {hi:.3f}"
+        for lo, hi in zip(v["sajung_bid"] if "sajung_bid" in v else v["sajung"], v["winner_sajung"])]
+    return v
 
 
 def default_keywords():

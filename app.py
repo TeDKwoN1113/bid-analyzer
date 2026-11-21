@@ -33,7 +33,7 @@ if _pw and not st.session_state.get("authed"):
 
 # ---------------- 사이드바 ----------------
 st.sidebar.title("⚡ 입찰 분석기")
-page = st.sidebar.radio("메뉴", ["📋 공고 현황", "📊 사정율 분석", "🧮 투찰 계산기",
+page = st.sidebar.radio("메뉴", ["📋 공고 현황", "📊 사정율 분석", "🧮 투찰 계산기", "📝 우리 투찰",
                                "🏢 경쟁업체", "⬇️ 데이터 수집", "⚙️ 설정 · API 점검"])
 
 use_sample = st.sidebar.toggle("샘플(연습용) 데이터로 보기", value=not settings["service_key"],
@@ -50,8 +50,9 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("필터")
 kw = st.sidebar.text_input("업종 키워드(쉼표 구분)", ", ".join(settings["target_keywords"]))
 keywords = [k.strip() for k in kw.split(",") if k.strip()]
+company = db.company()
 only_ok = st.sidebar.checkbox(
-    f"우리가 참가 가능한 공고만 ({settings['company_region']} 업체 · {', '.join(settings['company_licenses'])})",
+    f"우리가 참가 가능한 공고만 ({company['region']} 업체 · {', '.join(company['licenses'])})",
     value=True, help="참가가능지역에 우리 지역이 있거나 지역제한이 없는 공고, 우리 면허로 넣을 수 있는 공고만 봅니다.")
 rg = st.sidebar.text_input("지역/기관 키워드(비우면 전체)", ", ".join(settings["default_regions"]),
                            help="공사현장 지역·기관명으로 더 좁힐 때 사용 (예: 울산)")
@@ -275,11 +276,88 @@ elif page == "🧮 투찰 계산기":
     m1.metric("투찰금액", f"{analysis.bid_amount(base, my_s, lr, a_val):,}원")
     m2.metric("이 사정율의 과거 낙찰확률", "-" if my_p is None or pd.isna(my_p) else f"{my_p:.2f}%")
 
+    if row is not None:
+        memo = st.text_input("메모 (선택)", key="calc_memo")
+        if st.button("📝 이 금액으로 투찰 기록 저장"):
+            db.upsert_many("my_bids", [{"bid_key": row["bid_key"], "amount": analysis.bid_amount(base, my_s, lr, a_val),
+                                        "sajung": my_s, "memo": memo, "my_rank": None, "checked_at": None,
+                                        "created_at": db.now()}])
+            st.success("저장했습니다. 개찰 후 결과가 자동으로 채워집니다. ('📝 우리 투찰' 메뉴)")
+
     win_chart(hist, my_s, rec)
     st.caption(WIN_HELP)
     tbl = analysis.sajung_table(hist, base, lr, a_val)
     st.dataframe(tbl, hide_index=True, use_container_width=True, height=300,
                  column_config={"투찰금액(원)": st.column_config.NumberColumn(format="%d")})
+
+# ---------------- 우리 투찰 ----------------
+elif page == "📝 우리 투찰":
+    st.header("📝 우리 회사 투찰 기록")
+    if not company["bizno"]:
+        st.info("'⚙️ 설정'에서 회사 사업자번호를 등록하면 개찰 후 우리 순위를 자동으로 찾아 채웁니다.")
+    with st.expander("➕ 투찰 기록 추가", expanded=False):
+        cand = raw.sort_values("open_date", ascending=False)
+        cand = cand[cand["open_date"] >= pd.Timestamp.now() - pd.Timedelta(days=60)]
+        opts = [f"{r.bid_key} | {r.name}" for r in cand.itertuples()]
+        pick = st.selectbox("공고 (최근 60일 + 개찰 전)", opts) if opts else None
+        c1, c2 = st.columns(2)
+        amt_in = c1.number_input("투찰금액(원) (모르면 0)", min_value=0.0, step=1000.0, format="%.0f")
+        s_in = c2.number_input("투찰 사정율(%) (금액을 넣었으면 비워도 됨)", min_value=0.0, max_value=110.0,
+                               value=0.0, step=0.01, format="%.3f")
+        memo = st.text_input("메모")
+        if st.button("저장", type="primary") and pick:
+            key = pick.split(" | ")[0]
+            r = raw[raw["bid_key"] == key].iloc[0]
+            amount = amt_in or (analysis.bid_amount(r["base_amt"], s_in, r["lower_rate"], r["a_value"])
+                                if s_in and pd.notna(r["base_amt"]) and pd.notna(r["lower_rate"]) else None)
+            db.upsert_many("my_bids", [{"bid_key": key, "amount": amount, "sajung": s_in or None, "memo": memo,
+                                        "my_rank": None, "checked_at": None, "created_at": db.now()}])
+            st.cache_data.clear()
+            st.success("저장했습니다.")
+
+    v = analysis.my_bids_view(raw)
+    if v.empty:
+        st.info("아직 기록이 없습니다. 투찰 계산기에서 '투찰 기록 저장'을 누르거나 위에서 추가하세요. "
+                "사업자번호를 등록하면 개찰순위에 우리 회사가 나온 공고는 자동으로 추가됩니다.")
+        st.stop()
+    done = v[~v["결과"].isin(["개찰 전", "결과 대기"])]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("투찰 기록", f"{len(v)}건")
+    c2.metric("1순위", f"{(v['결과'] == '🏆 1순위').sum()}건")
+    c3.metric("하한 미달", f"{(v['결과'] == '하한 미달').sum()}건")
+    gap = (done["sajung"] - done["sajung_bid"]).mean() if len(done) else None
+    c4.metric("우리 사정율 - 실제 사정율 (평균)", "-" if gap is None or pd.isna(gap) else f"{gap:+.3f}%p",
+              help="+ 면 평균적으로 예정가격보다 높게(안전하게), - 면 낮게(하한 미달 위험) 넣고 있다는 뜻")
+    show = v.sort_values("open_date", ascending=False)[
+        ["결과", "name", "org", "open_dt", "amount", "sajung", "sajung_bid", "winner_sajung", "my_rank",
+         "participants", "first_company", "memo", "bid_key"]].rename(columns={
+            "name": "공고명", "org": "기관", "open_dt": "개찰일시", "amount": "우리 금액", "sajung": "우리 사정율",
+            "sajung_bid": "실제 사정율", "winner_sajung": "1순위 사정율", "my_rank": "우리 순위",
+            "participants": "참가수", "first_company": "1순위 업체", "memo": "메모", "bid_key": "공고번호"})
+    st.dataframe(show, hide_index=True, use_container_width=True,
+                 column_config={"우리 금액": st.column_config.NumberColumn(format="%d"),
+                                "우리 사정율": st.column_config.NumberColumn(format="%.3f"),
+                                "실제 사정율": st.column_config.NumberColumn(format="%.3f"),
+                                "1순위 사정율": st.column_config.NumberColumn(format="%.3f")})
+    st.caption("낙찰 조건: 실제 사정율 ≤ 우리 사정율 < 1순위 사정율. 우리 사정율이 실제 사정율보다 낮으면 하한 미달, "
+               "1순위 사정율보다 높으면 다른 업체가 더 낮게 넣은 것입니다.")
+    if len(done):
+        fig = go.Figure()
+        d2 = done.sort_values("open_date")
+        fig.add_scatter(x=d2["open_date"], y=d2["sajung_bid"], mode="markers", name="실제 사정율(하한 기준)",
+                        marker=dict(symbol="line-ew-open", size=14, color="#9aa4b2"))
+        fig.add_scatter(x=d2["open_date"], y=d2["winner_sajung"], mode="markers", name="1순위 사정율",
+                        marker=dict(symbol="line-ew-open", size=14, color="#2da44e"))
+        fig.add_scatter(x=d2["open_date"], y=d2["sajung"], mode="markers", name="우리 사정율",
+                        marker=dict(size=9, color="#cf222e"))
+        fig.update_layout(yaxis_title="사정율(%)", height=380, legend=dict(orientation="h", y=1.12))
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("빨간 점이 회색 선과 초록 선 사이에 있었으면 낙찰입니다.")
+    with st.expander("기록 삭제"):
+        dk = st.selectbox("삭제할 공고", v["bid_key"] + " | " + v["name"].fillna(""))
+        if st.button("삭제"):
+            db.execute("DELETE FROM my_bids WHERE bid_key = :k", {"k": dk.split(" | ")[0]})
+            st.success("삭제했습니다. 새로고침하면 반영됩니다.")
 
 # ---------------- 경쟁업체 ----------------
 elif page == "🏢 경쟁업체":
@@ -395,9 +473,20 @@ elif page == "⚙️ 설정 · API 점검":
     key = st.text_input("공공데이터포털 인증키 (Decoding 키 권장)", settings["service_key"], type="password")
     kws = st.text_input("기본 업종 키워드", ", ".join(settings["target_keywords"]))
     rgs = st.text_input("기본 지역 키워드 (비우면 참가 가능한 공고 전체)", ", ".join(settings["default_regions"]))
-    creg = st.text_input("우리 회사 소재지 (참가가능지역 판단)", settings["company_region"])
-    clic = st.text_input("우리 회사 보유 면허 (쉼표 구분, 예: 전기공사업, 정보통신공사업)",
-                         ", ".join(settings["company_licenses"]))
+    st.subheader("🏢 우리 회사")
+    cc1, cc2 = st.columns(2)
+    cname = cc1.text_input("회사명", company["name"])
+    cbiz = cc2.text_input("사업자번호 (개찰순위에서 우리 순위 찾기용, 숫자 10자리)", company["bizno"])
+    creg = cc1.text_input("소재지 (참가가능지역 판단, 예: 울산)", company["region"])
+    clic = cc2.text_input("보유 면허 (쉼표 구분, 예: 전기공사업, 정보통신공사업)", ", ".join(company["licenses"]))
+    if st.button("회사 정보 저장"):
+        db.set_kv("company_name", cname.strip())
+        db.set_kv("company_bizno", cbiz.strip().replace("-", ""))
+        db.set_kv("company_region", creg.strip())
+        db.set_kv("company_licenses", clic.strip())
+        st.cache_data.clear()
+        st.success("저장했습니다. (자동 수집·알림에도 적용됩니다)")
+    st.subheader("분석 기본값")
     mx = st.number_input("기본 최대 금액(억원)", 1.0, 1000.0, settings["max_amount"] / 1e8)
     apw = st.text_input("접속 비밀번호 (외부/휴대폰 접속 시 꼭 설정)", settings.get("app_password", ""),
                         type="password")
@@ -406,8 +495,6 @@ elif page == "⚙️ 설정 · API 점검":
         settings["service_key"] = key.strip()
         settings["target_keywords"] = [k.strip() for k in kws.split(",") if k.strip()]
         settings["default_regions"] = [r.strip() for r in rgs.split(",") if r.strip()]
-        settings["company_region"] = creg.strip()
-        settings["company_licenses"] = [x.strip() for x in clic.split(",") if x.strip()]
         settings["max_amount"] = int(mx * 1e8)
         save_settings(settings)
         st.success("저장했습니다. 사이드바의 '샘플 데이터로 보기'를 끄면 실제 데이터를 씁니다.")

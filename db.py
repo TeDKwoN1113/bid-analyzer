@@ -66,6 +66,15 @@ TABLES = {
     "notified": ("""
         bid_key TEXT, kind TEXT, sent_at TEXT
     """, ["bid_key", "kind"]),
+    # 우리 회사 투찰 기록
+    "my_bids": ("""
+        bid_key TEXT, amount DOUBLE PRECISION, sajung DOUBLE PRECISION, memo TEXT,
+        my_rank INTEGER, checked_at TEXT, created_at TEXT
+    """, ["bid_key"]),
+    # 회사 정보 등 사이트·자동수집이 함께 쓰는 설정
+    "kv": ("""
+        k TEXT, v TEXT
+    """, ["k"]),
     "collect_log": ("""
         run_at TEXT, kind TEXT, period TEXT, count INTEGER, message TEXT
     """, None),
@@ -176,3 +185,24 @@ def done_days(op: str) -> set[str]:
 
 def mark_day(op: str, day: str, rows: int) -> None:
     upsert_many("collect_days", [{"op": op, "day": day, "rows": rows, "done_at": now()}])
+
+
+def get_kv(k: str, default=None):
+    df = query_df("SELECT v FROM kv WHERE k = :k", {"k": k})
+    return df["v"].iloc[0] if len(df) else default
+
+
+def set_kv(k: str, v: str) -> None:
+    upsert_many("kv", [{"k": k, "v": v}])
+
+
+def company() -> dict:
+    """회사 정보: DB에 저장된 값 우선, 없으면 설정 기본값."""
+    s = load_settings()
+    lic = get_kv("company_licenses")
+    return {
+        "name": get_kv("company_name", ""),
+        "bizno": (get_kv("company_bizno", "") or "").replace("-", ""),
+        "region": get_kv("company_region", s["company_region"]),
+        "licenses": [x.strip() for x in lic.split(",") if x.strip()] if lic else s["company_licenses"],
+    }
