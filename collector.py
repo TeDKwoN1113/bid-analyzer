@@ -68,6 +68,7 @@ def map_bid(r: dict) -> list[tuple[str, dict]]:
         "lower_rate": num(g(r, "sucsfbidLwltRate")),
         "url": g(r, "bidNtceDtlUrl", "bidNtceUrl"),
         "spec_docs": _spec_docs(r),
+        "ntce_kind": g(r, "ntceKindNm"),      # 등록공고 / 변경공고 / 취소공고 / 재공고 …
     })]
 
 

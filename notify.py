@@ -133,9 +133,9 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
 
     # 0) 오늘 마감인데 아직 투찰 기록이 없는 공고 → 투찰금액과 함께 다시 알림
     close = pd.to_datetime(t["close_dt"], errors="coerce", format="mixed")
-    mine = set(db.query_df("SELECT bid_key FROM my_bids")["bid_key"])
+    mine = set(db.query_df("SELECT bid_key FROM my_bids")["bid_key"].str.rsplit("-", n=1).str[0])
     dl = t[(close >= now) & (close <= now.normalize() + pd.Timedelta(days=1)) & t["base_amt_notice"].notna()]
-    dl = dl[~dl["bid_key"].isin(mine)]
+    dl = dl[~dl["bid_no"].isin(mine)]
     dl = dl[~dl["bid_key"].map(lambda k: (k, "deadline") in done).astype(bool)]
     if len(dl):
         lines = [f"⏰ <b>오늘 투찰 마감 {len(dl)}건</b> (아직 기록 없음)"]

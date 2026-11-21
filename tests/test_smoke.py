@@ -127,3 +127,14 @@ def test_app_pages_render(df, page):
     assert not at.exception, at.exception
     at.sidebar.radio[0].set_value(page).run()
     assert not at.exception, [e.value for e in at.exception]
+
+
+def test_revised_and_cancelled_notices():
+    d = pd.DataFrame({"bid_key": ["A-000", "A-001", "B-000", "C-000"], "bid_no": ["A", "A", "B", "C"],
+                      "bid_ord": ["000", "001", "000", "000"], "close_dt": ["11/20", "11/25", "x", "y"],
+                      "base_amt_notice": [100.0, None, 5.0, 7.0], "plan_price": [None, 99.0, None, None],
+                      "ntce_kind": ["등록공고", "변경공고", "등록공고", "취소공고"]})
+    out = analysis._latest_order(d).set_index("bid_no")
+    assert list(sorted(out.index)) == ["A", "B"]                       # 취소공고 제외
+    assert out.at["A", "bid_ord"] == "001" and out.at["A", "close_dt"] == "11/25"  # 최신 차수
+    assert out.at["A", "base_amt_notice"] == 100.0                     # 이전 차수 값으로 채움

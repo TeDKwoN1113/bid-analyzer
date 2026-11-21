@@ -187,7 +187,7 @@ if page == "🏠 오늘의 투찰":
     recent = elig[(elig["open_date"] < now) & (elig["open_date"] >= now - pd.Timedelta(days=3))]
     recent = recent[recent["plan_price"].notna() | recent["first_company"].notna()]
     mine = db.query_df("SELECT bid_key, amount FROM my_bids")
-    mine_map = dict(zip(mine["bid_key"], mine["amount"]))
+    mine_map = dict(zip(mine["bid_key"].str.rsplit("-", n=1).str[0], mine["amount"]))  # 공고번호 기준
 
     st.markdown(f"투찰 가능 **{len(todo)}건** · 3일 내 마감 "
                 f"**{(todo['마감기준'] <= now + pd.Timedelta(days=3)).sum()}건** · "
@@ -276,8 +276,8 @@ if page == "🏠 오늘의 투찰":
                 st.caption("낙찰 조건: 실제 사정율 ≤ 내 사정율 < 1순위 사정율. "
                            "신뢰도: 비교 공고 100건 이상 + 무작위의 2배 이상 = 높음, 30건 이상 = 보통, 그 외 낮음. "
                            "더 자세히는 '🧮 투찰 계산기'에서 그래프로 볼 수 있습니다.")
-            if r["bid_key"] in mine_map:
-                st.success(f"✓ 투찰 기록됨: {mine_map[r['bid_key']]:,.0f}원")
+            if r["bid_no"] in mine_map:
+                st.success(f"✓ 투찰 기록됨: {mine_map[r['bid_no']]:,.0f}원")
             else:
                 if st.button("📝 이 금액으로 투찰 기록", key=f"save_{r['bid_key']}"):
                     db.upsert_many("my_bids", [{"bid_key": r["bid_key"], "amount": pk["투찰금액"],

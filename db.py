@@ -21,7 +21,7 @@ TABLES = {
         name TEXT, org TEXT, demand_org TEXT, region TEXT, main_type TEXT,
         method TEXT, contract_method TEXT,
         notice_dt TEXT, close_dt TEXT, open_dt TEXT,
-        est_price DOUBLE PRECISION, lower_rate DOUBLE PRECISION, url TEXT, spec_docs TEXT
+        est_price DOUBLE PRECISION, lower_rate DOUBLE PRECISION, url TEXT, spec_docs TEXT, ntce_kind TEXT
     """, ["bid_key"]),
     # 참가가능지역 (없으면 지역제한 없음)
     "regions": ("""

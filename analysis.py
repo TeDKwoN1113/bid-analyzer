@@ -15,7 +15,7 @@ def load_dataset() -> pd.DataFrame:
         """
         SELECT b.bid_key, b.bid_no, b.bid_ord, b.name, b.org, b.demand_org, b.region,
                b.main_type, b.method, b.contract_method, b.notice_dt, b.close_dt, b.open_dt, b.est_price,
-               b.lower_rate, b.url, b.spec_docs,
+               b.lower_rate, b.url, b.spec_docs, b.ntce_kind,
                ba.base_amt AS base_amt_notice, ba.a_value, ba.range_begin, ba.range_end,
                ba.a_apply, ba.pure_cost, ba.a_detail,
                p.plan_price, p.base_amt AS base_amt_open,
@@ -30,6 +30,7 @@ def load_dataset() -> pd.DataFrame:
     )
     if df.empty:
         return df
+    df = _latest_order(df)
     # 참가가능지역·면허제한 (공고별로 여러 개 → 쉼표로 묶음)
     for table, col in (("regions", "region"), ("licenses", "license")):
         t = db.query_df(f"SELECT bid_key, {col} FROM {table}")
@@ -67,6 +68,23 @@ def load_dataset() -> pd.DataFrame:
     df.loc[(df["winner_sajung"] < 90) | (df["winner_sajung"] > 110), "winner_sajung"] = np.nan
     df.loc[(df["first_sajung"] < 90) | (df["first_sajung"] > 110), "first_sajung"] = np.nan
     return df
+
+
+def _latest_order(df: pd.DataFrame) -> pd.DataFrame:
+    """정정공고(차수 000→001…)는 같은 공고번호의 최신 차수 하나만 남기고,
+    최신 차수에 없는 정보(기초금액·개찰결과 등)는 다른 차수에서 채운다. 취소공고는 제외."""
+    df = df.assign(_ord=pd.to_numeric(df["bid_ord"], errors="coerce").fillna(0))
+    dup = df["bid_no"].duplicated(keep=False)
+    if dup.any():
+        multi = df[dup].sort_values(["bid_no", "_ord"])
+        fill_cols = [c for c in multi.columns if c not in ("bid_key", "bid_no", "bid_ord", "_ord", "ntce_kind")]
+        # 같은 공고번호 안에서 최신 차수 기준으로 빈 값을 이전 차수 값으로 채움
+        multi[fill_cols] = multi.groupby("bid_no", sort=False)[fill_cols].ffill()
+        latest = multi.groupby("bid_no", sort=False).tail(1)
+        df = pd.concat([df[~dup], latest], ignore_index=True)
+    kind = df["ntce_kind"].fillna("") if "ntce_kind" in df else pd.Series("", index=df.index)
+    df = df[~kind.str.contains("취소", regex=False)]
+    return df.drop(columns="_ord").reset_index(drop=True)
 
 
 def eligible(df: pd.DataFrame, company_region: str | None = None,
@@ -604,7 +622,9 @@ def my_bids_view(df: pd.DataFrame) -> pd.DataFrame:
     mb = db.query_df("SELECT * FROM my_bids")
     if mb.empty:
         return mb
-    v = mb.merge(df, on="bid_key", how="left", suffixes=("", "_bid"))
+    # 정정공고로 차수가 바뀌어도 이어지도록 공고번호로 연결
+    mb["bid_no"] = mb["bid_key"].str.rsplit("-", n=1).str[0]
+    v = mb.merge(df.drop(columns=["bid_key"]), on="bid_no", how="left", suffixes=("", "_bid"))
     a = v["a_value"].fillna(0)
     r = v["lower_rate"] / 100
     # 금액만 적었으면 사정율 역산, 사정율만 적었으면 금액 계산
