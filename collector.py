@@ -471,6 +471,23 @@ def backfill_status() -> list[dict]:
     return out
 
 
+def print_status() -> None:
+    """실행 기록(로그)에 남기는 점검 요약 — 건수·비율만, 회사 정보는 넣지 않음."""
+    try:
+        import analysis
+        df = analysis.load_dataset()
+        print("=== 점검 요약 ===")
+        print(f"DB 용량: {db.size_mb() or 0:,.0f}MB")
+        for r in backfill_status():
+            print(f"채우기 {r['항목']}: {r['수집된 날수']}/{r['목표 날수']}일")
+        h = analysis.data_health(df)
+        if len(h):
+            print(h.to_string(index=False))
+        print("추천 방식:", analysis.STRATEGIES[analysis.current_strategy()])
+    except Exception as e:  # noqa: BLE001
+        print("점검 요약 실패:", e)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="나라장터 데이터 수집")
     ap.add_argument("--days", type=int, default=7, help="최근 N일")
@@ -480,11 +497,15 @@ if __name__ == "__main__":
     ap.add_argument("--quick", action="store_true", help="어제·오늘 공고/기초금액/개찰결과만 빠르게")
     a = ap.parse_args()
     print("DB:", "원격(PostgreSQL)" if db.is_remote() else db.url())
-    if a.auto:
-        auto()
-        raise SystemExit(0)
-    if a.quick:
-        quick()
+    if a.auto or a.quick:
+        try:
+            import notify
+            ch = notify.channels()
+            print("알림 채널:", ", ".join(ch) if ch else "없음 (GitHub Secrets 의 TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID 확인 필요)")
+        except Exception as e:  # noqa: BLE001
+            print("알림 채널 확인 실패:", e)
+        auto() if a.auto else quick()
+        print_status()
         raise SystemExit(0)
     if a.d1:
         d1 = datetime.strptime(a.d1, "%Y%m%d").date()
