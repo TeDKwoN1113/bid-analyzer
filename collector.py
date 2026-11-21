@@ -311,7 +311,7 @@ def pending_rank_bids(limit: int) -> list[tuple[str, str]]:
         return []
     done = set(db.query_df("SELECT DISTINCT bid_key FROM ranks")["bid_key"])
     df = df[(df["participants"] > 0) & (df["open_dt"].astype(str) >= since) & ~df["bid_key"].isin(done)]
-    df = analysis.apply_filters(df, keywords=s["target_keywords"], regions=s["default_regions"],
+    df = analysis.apply_filters(df, keywords=analysis.company_keywords(), regions=s["default_regions"],
                                 eligible_only=True)
     df = df.sort_values("open_date", ascending=False).head(limit)
     return list(zip(df["bid_no"], df["bid_ord"]))

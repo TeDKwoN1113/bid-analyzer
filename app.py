@@ -34,7 +34,7 @@ if _pw and not st.session_state.get("authed"):
 # ---------------- 사이드바 ----------------
 st.sidebar.title("⚡ 입찰 분석기")
 page = st.sidebar.radio("메뉴", ["🏠 오늘의 투찰", "📋 공고 현황", "📊 사정율 분석", "🧮 투찰 계산기", "📝 우리 투찰",
-                               "🏢 경쟁업체", "⬇️ 데이터 수집", "⚙️ 설정 · API 점검"])
+                               "🏢 경쟁업체", "🔬 추천 검증", "⬇️ 데이터 수집", "⚙️ 설정 · API 점검"])
 
 use_sample = st.sidebar.toggle("샘플(연습용) 데이터로 보기", value=not settings["service_key"],
                                help="API 연결 전에 기능을 미리 써보는 가상 데이터입니다.")
@@ -48,8 +48,13 @@ if use_sample:
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("필터")
-kw = st.sidebar.text_input("업종 키워드(쉼표 구분)", ", ".join(settings["target_keywords"]))
-keywords = [k.strip() for k in kw.split(",") if k.strip()]
+_company = db.company()
+_lics = _company["licenses"]
+sel_lics = st.sidebar.multiselect("업종 (보유 면허)", _lics, default=_lics,
+                                  help="면허는 '⚙️ 설정 → 우리 회사'에서 추가합니다.")
+kw_extra = st.sidebar.text_input("추가 키워드 (선택, 쉼표 구분)", "")
+keywords = analysis.company_keywords(sel_lics) if sel_lics else []
+keywords += [k.strip() for k in kw_extra.split(",") if k.strip() and k.strip() not in keywords]
 company = db.company()
 only_ok = st.sidebar.checkbox(
     f"우리가 참가 가능한 공고만 ({company['region']} 업체 · {', '.join(company['licenses'])})",
@@ -174,7 +179,7 @@ if page == "🏠 오늘의 투찰":
             if pd.isna(r["lower_rate"]):
                 st.warning("하한율 정보가 없어 투찰금액을 계산할 수 없습니다. 공고문을 확인하세요.")
                 continue
-            pk = analysis.pick_bid(raw, r, keywords)
+            pk = analysis.pick_bid(raw, r, analysis.bid_keywords(r, sel_lics or _lics))
             if not pk:
                 st.caption("투찰금액을 계산할 수 없습니다.")
                 continue
@@ -500,6 +505,47 @@ elif page == "🏢 경쟁업체":
             column_config={"투찰금액": st.column_config.NumberColumn(format="%d"),
                            "투찰사정율(%)": st.column_config.NumberColumn(format="%.3f")})
 
+# ---------------- 추천 검증 ----------------
+elif page == "🔬 추천 검증":
+    st.header("🔬 추천 방식 검증 (백테스트)")
+    st.markdown(
+        "지난 공고 하나하나에 대해 **그 공고 이전 데이터만으로** 사정율을 골랐다면 실제로 어땠는지 시험합니다. "
+        "미래 데이터를 쓰지 않으므로, 실제로 이 방식대로 넣었을 때의 성적과 같습니다.")
+    need_data()
+    c1, c2 = st.columns(2)
+    days_bt = c1.selectbox("시험 기간", [30, 60, 90, 180], index=2, format_func=lambda d: f"최근 {d}일")
+    n_bt = c2.selectbox("최대 시험 공고 수", [100, 200, 300, 500], index=1)
+    test_df = analysis.apply_filters(raw, keywords=keywords, regions=regions, eligible_only=only_ok,
+                                     max_amt=amt_range[1] * 1e8, min_amt=amt_range[0] * 1e8 or None)
+    if st.button("검증 실행", type="primary"):
+        bar = st.progress(0.0, text="시험 중...")
+        summ, det = analysis.backtest(
+            raw[raw["bid_key"].isin(test_df["bid_key"]) | (raw["open_date"] < pd.Timestamp.now() - pd.Timedelta(days=days_bt))],
+            keywords, test_days=days_bt, max_tests=n_bt,
+            progress=lambda i, n: bar.progress(i / max(n, 1), text=f"시험 중... {i}/{n}"))
+        st.session_state["bt"] = (summ, det, days_bt)
+    if "bt" in st.session_state:
+        summ, det, d_ = st.session_state["bt"]
+        if summ.empty:
+            st.warning("시험할 공고가 부족합니다. 데이터가 더 쌓인 뒤 다시 실행하세요.")
+        else:
+            st.subheader(f"결과 (최근 {d_}일, 시험 공고 {int(summ['시험 공고'].max())}건)")
+            st.dataframe(summ, hide_index=True, use_container_width=True)
+            st.markdown(
+                "- **1순위**: 그 방식대로 넣었으면 실제로 1순위였던 공고 수\n"
+                "- **무작위 기대 1순위**: 아무렇게나 넣었을 때 기대되는 1순위 수 (참가업체 수로 계산)\n"
+                "- **10위 이내 / 중앙 순위**: 개찰순위를 받은 공고에서, 그 금액이었다면 몇 위였을지. "
+                "1순위는 워낙 드물어서 이 지표가 방식의 좋고 나쁨을 더 빨리 보여줍니다\n"
+                "- **하한 미달률**: 너무 낮게 넣어 탈락했을 비율")
+            st.caption("※ 시험 공고가 수백 건이어도 1순위는 몇 건 수준이라 우연의 영향이 큽니다. "
+                       "10위 이내율과 중앙 순위를 함께 보세요. 데이터가 쌓일수록 결과가 믿을 만해집니다.")
+            with st.expander("공고별 상세"):
+                st.dataframe(det.drop(columns=["순위 있음"]).sort_values(["개찰일", "방식"], ascending=[False, True]),
+                             hide_index=True, use_container_width=True,
+                             column_config={"실제 사정율": st.column_config.NumberColumn(format="%.3f"),
+                                            "1순위 사정율": st.column_config.NumberColumn(format="%.3f"),
+                                            "무작위 기대": st.column_config.NumberColumn(format="%.4f")})
+
 # ---------------- 데이터 수집 ----------------
 elif page == "⬇️ 데이터 수집":
     st.header("⬇️ 나라장터 데이터 수집")
@@ -566,7 +612,7 @@ elif page == "⬇️ 데이터 수집":
 elif page == "⚙️ 설정 · API 점검":
     st.header("⚙️ 설정")
     key = st.text_input("공공데이터포털 인증키 (Decoding 키 권장)", settings["service_key"], type="password")
-    kws = st.text_input("기본 업종 키워드", ", ".join(settings["target_keywords"]))
+    kws = st.text_input("기본 업종 키워드 (면허를 등록하지 않았을 때만 사용)", ", ".join(settings["target_keywords"]))
     rgs = st.text_input("기본 지역 키워드 (비우면 참가 가능한 공고 전체)", ", ".join(settings["default_regions"]))
     st.subheader("🏢 우리 회사")
     cc1, cc2 = st.columns(2)
@@ -603,7 +649,7 @@ elif page == "⚙️ 설정 · API 점검":
     else:
         st.info("텔레그램 또는 이메일이 아직 설정되지 않았습니다. 사용설명서의 '알림 설정'을 참고해 "
                 "Streamlit Secrets 와 GitHub Secrets 에 값을 넣어주세요.")
-    kw_n = settings["notify_keywords"] or settings["target_keywords"]
+    kw_n = settings["notify_keywords"] or analysis.company_keywords()
     rg_n = settings["notify_regions"] or settings["default_regions"]
     mx_n = settings["notify_max_amount"] or settings["max_amount"]
     st.caption(f"알림 조건: 업종 {', '.join(kw_n)} · 지역 {', '.join(rg_n) or '전국'} · {mx_n / 1e8:,.0f}억 미만 "

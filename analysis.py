@@ -433,5 +433,148 @@ def my_bids_view(df: pd.DataFrame) -> pd.DataFrame:
     return v
 
 
+# 면허 → 공고 검색 키워드 (공고명·주공종·면허제한 텍스트에서 찾음)
+INDUSTRY_KEYWORDS = {
+    "전기공사업": ["전기"],
+    "정보통신공사업": ["통신"],
+    "소방시설공사업": ["소방"],
+    "전문소방시설공사업": ["소방"],
+    "일반소방시설공사업": ["소방"],
+    "기계설비": ["기계설비", "설비"],
+    "실내건축공사업": ["실내건축"],
+    "토목건축공사업": ["토목", "건축"],
+    "토목공사업": ["토목"],
+    "건축공사업": ["건축"],
+    "조경공사업": ["조경"],
+}
+
+
+def keywords_for_license(lic: str) -> list[str]:
+    for k, v in INDUSTRY_KEYWORDS.items():
+        if k in lic or lic in k:
+            return v
+    return [lic.replace("공사업", "").strip() or lic]
+
+
+def company_keywords(licenses: list[str] | None = None) -> list[str]:
+    """회사 보유 면허 기준 업종 키워드 (없으면 설정의 기본 키워드)."""
+    lic = licenses if licenses is not None else db.company()["licenses"]
+    out = []
+    for x in lic:
+        for k in keywords_for_license(x):
+            if k not in out:
+                out.append(k)
+    return out or load_settings()["target_keywords"]
+
+
+def bid_keywords(row, licenses: list[str] | None = None) -> list[str]:
+    """이 공고가 우리 면허 중 어느 업종인지 → 그 업종 키워드 (추천 계산 시 같은 업종끼리 비교)."""
+    lic = licenses if licenses is not None else db.company()["licenses"]
+    text = f"{row.get('licenses', '')} {row.get('name', '')} {row.get('main_type', '')}"
+    for x in lic:
+        if x in text:
+            return keywords_for_license(x)
+    for x in lic:
+        kws = keywords_for_license(x)
+        if any(k in text for k in kws):
+            return kws
+    return company_keywords(lic)
+
+
 def default_keywords():
-    return load_settings()["target_keywords"]
+    return company_keywords()
+
+
+# ---------------- 추천 방식 검증 (백테스트) ----------------
+
+def _pick_from_curve(curve: pd.DataFrame) -> float | None:
+    pts = best_points(curve, top=1)
+    return round(pts[0]["사정율"], 2) if pts else None
+
+
+def strategy_picks(hist: pd.DataFrame, row, keywords) -> dict:
+    """같은 과거 데이터로 여러 방식의 사정율 선택."""
+    done = hist[hist["sajung"].notna()]
+    broad = apply_filters(done, keywords=keywords) if keywords else done
+    if len(win_windows(broad)) < 30:
+        broad = done
+    local = similar_history(hist, row, keywords)
+    n_l = len(win_windows(local))
+    out = {}
+    if len(win_windows(broad)) < 5:
+        return out
+    cb = win_curve(broad)
+    cl = win_curve(local) if n_l else cb
+    mix = (n_l * cl["낙찰확률"].fillna(0) + PRIOR_WEIGHT * cb["낙찰확률"].fillna(0)) / (n_l + PRIOR_WEIGHT)
+    out["① 현재 방식 (기관+업종 혼합)"] = _pick_from_curve(cb.assign(낙찰확률=mix))
+    out["② 업종 전체만"] = _pick_from_curve(cb)
+    if n_l >= 5:
+        out["③ 같은 기관/비슷한 금액만"] = _pick_from_curve(cl)
+    out["④ 단순 평균 (사정율 평균)"] = round(float(broad["sajung"].mean()), 2)
+    w = broad["winner_sajung"].dropna()
+    if len(w):
+        out["⑤ 과거 1순위 사정율 평균"] = round(float(w.mean()), 2)
+    return out
+
+
+def backtest(df: pd.DataFrame, keywords, test_days: int = 90, max_tests: int = 300,
+             min_history: int = 50, progress=None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """최근 test_days 일 동안의 공고 각각에 대해, 그 공고 '이전' 데이터만으로 사정율을 골랐다면
+    실제로 1순위였는지 확인. (미래 데이터를 쓰지 않는 공정한 시험)"""
+    done = df[df["sajung"].notna() & df["winner_sajung"].notna() & df["open_date"].notna()]
+    done = done[done["winner_sajung"] >= done["sajung"]].sort_values("open_date")
+    tests = apply_filters(done, keywords=keywords)
+    tests = tests[tests["open_date"] >= pd.Timestamp.now() - pd.Timedelta(days=test_days)]
+    if len(tests) > max_tests:
+        tests = tests.sample(max_tests, random_state=0).sort_values("open_date")
+    # 개찰순위(상위 업체 투찰금액)가 있으면 '가상 순위'까지 계산
+    rk = db.query_df("SELECT bid_key, amount FROM ranks WHERE rank > 0 AND amount IS NOT NULL")
+    amounts = {k: np.sort(g["amount"].values) for k, g in rk.groupby("bid_key")} if len(rk) else {}
+    rows = []
+    for i, (_, r) in enumerate(tests.iterrows()):
+        if progress:
+            progress(i + 1, len(tests))
+        hist = df[df["open_date"] < r["open_date"]]
+        if hist["sajung"].notna().sum() < min_history:
+            continue
+        picks = strategy_picks(hist, r, bid_keywords(r))
+        p = r["participants"]
+        for name, s_ in picks.items():
+            if s_ is None:
+                continue
+            res = "1순위" if r["sajung"] <= s_ < r["winner_sajung"] else ("하한 미달" if s_ < r["sajung"] else "1순위보다 높음")
+            vrank = np.nan
+            comp = amounts.get(r["bid_key"])
+            if comp is not None and len(comp) and res != "하한 미달" and pd.notna(r["lower_rate"]):
+                mine = bid_amount(r["base_amt"], s_, r["lower_rate"], r["a_value"] or 0)
+                vrank = 1 + int((comp < mine).sum())
+                if vrank > len(comp):
+                    vrank = np.inf  # 받은 상위권 밖
+            rows.append({"방식": name, "bid_key": r["bid_key"], "공고명": r["name"], "개찰일": r["open_date"],
+                         "추천 사정율": s_, "실제 사정율": r["sajung"], "1순위 사정율": r["winner_sajung"],
+                         "결과": res, "가상 순위": vrank, "순위 있음": comp is not None,
+                         "무작위 기대": (1 / p) if pd.notna(p) and p > 0 else np.nan})
+    detail = pd.DataFrame(rows)
+    if detail.empty:
+        return detail, detail
+    g = detail.groupby("방식")
+    summary = pd.DataFrame({
+        "시험 공고": g.size(),
+        "1순위": g["결과"].apply(lambda x: int((x == "1순위").sum())),
+        "하한 미달": g["결과"].apply(lambda x: int((x == "하한 미달").sum())),
+        "무작위 기대 1순위": g["무작위 기대"].sum().round(2),
+    })
+    summary["낙찰률(%)"] = (summary["1순위"] / summary["시험 공고"] * 100).round(2)
+    summary["무작위 대비(배)"] = (summary["1순위"] / summary["무작위 기대 1순위"]).round(2)
+    summary["하한 미달률(%)"] = (summary["하한 미달"] / summary["시험 공고"] * 100).round(1)
+    ranked = detail[detail["순위 있음"]]
+    if len(ranked):
+        gr = ranked.groupby("방식")
+        summary["순위 비교 공고"] = gr.size()
+        summary["10위 이내"] = gr["가상 순위"].apply(lambda x: int((x <= 10).sum()))
+        summary["10위 이내율(%)"] = (summary["10위 이내"] / summary["순위 비교 공고"] * 100).round(1)
+        summary["중앙 순위(유효 투찰)"] = gr["가상 순위"].apply(
+            lambda x: x[np.isfinite(x)].median() if np.isfinite(x).any() else np.nan)
+    sort_cols = ["10위 이내", "1순위"] if "10위 이내" in summary else ["1순위", "무작위 대비(배)"]
+    summary = summary.reset_index().sort_values(sort_cols, ascending=False)
+    return summary, detail

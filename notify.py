@@ -118,7 +118,7 @@ def _title(r) -> str:
 def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
     """보낼 메시지 본문과 (공고키, 종류) 목록."""
     s = load_settings()
-    kw = s["notify_keywords"] or s["target_keywords"]
+    kw = s["notify_keywords"] or analysis.company_keywords()
     rg = s["notify_regions"] or s["default_regions"]
     mx = s["notify_max_amount"] or s["max_amount"]
     df = analysis.load_dataset() if df is None else df
@@ -155,7 +155,7 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
             av = f" | A값 {_won(r['a_value'])}" if r["a_value"] else ""
             line = (f"• {_title(r)}\n  {_e(r['org'])} | 개찰 {_dt(r['open_dt'])}\n"
                     f"  기초금액 {_won(r['base_amt'])} | 하한율 {lr}{av}")
-            pk = analysis.pick_bid(df, r, kw)
+            pk = analysis.pick_bid(df, r, analysis.bid_keywords(r))
             if pk:
                 badge = {"높음": "🟢", "보통": "🟡", "낮음": "🔴"}[pk["신뢰도"]]
                 line += (f"\n  💰 투찰금액 <b>{pk['투찰금액']:,}원</b>"
