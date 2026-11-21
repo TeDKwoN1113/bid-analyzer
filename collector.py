@@ -69,6 +69,8 @@ def map_bid(r: dict) -> list[tuple[str, dict]]:
         "url": g(r, "bidNtceDtlUrl", "bidNtceUrl"),
         "spec_docs": _spec_docs(r),
         "ntce_kind": g(r, "ntceKindNm"),      # 등록공고 / 변경공고 / 취소공고 / 재공고 …
+        "qual_dt": g(r, "bidQlfctRgstDt"),    # 입찰참가자격 등록(참가신청) 마감
+        "begin_dt": g(r, "bidBeginDt"),       # 투찰 시작
     })]
 
 

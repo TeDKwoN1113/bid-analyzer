@@ -65,6 +65,7 @@ def build(n_bids: int = 600, seed: int = 7) -> str:
             "notice_dt": (dt - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S"),
             "close_dt": (dt - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S"),
             "open_dt": dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "qual_dt": (dt - timedelta(days=int(rng.integers(0, 4)), hours=2)).strftime("%Y-%m-%d %H:%M:%S"),
             "est_price": round(base / 1.1), "lower_rate": lr, "url": "",
         })
         add("base_amounts", {"bid_key": key, "base_amt": base, "range_begin": -2,

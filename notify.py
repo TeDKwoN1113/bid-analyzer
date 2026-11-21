@@ -147,6 +147,18 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
             keys.append((r["bid_key"], "deadline"))
         parts.append("\n".join(lines))
 
+    # 0-1) 오늘 참가신청(입찰참가자격 등록) 마감
+    qd = pd.to_datetime(t["qual_dt"], errors="coerce", format="mixed") if "qual_dt" in t else pd.Series(pd.NaT, index=t.index)
+    qq = t[(qd >= now) & (qd <= now.normalize() + pd.Timedelta(days=1)) & (t["open_date"] >= now)]
+    qq = qq[~qq["bid_no"].isin(mine)]
+    qq = qq[~qq["bid_key"].map(lambda k: (k, "qual") in done).astype(bool)]
+    if len(qq):
+        lines = [f"📝 <b>오늘 참가신청 마감 {len(qq)}건</b> (나라장터에서 입찰참가 신청 필요)"]
+        for _, r in qq.assign(_q=qd).sort_values("_q").iterrows():
+            lines.append(f"• {_title(r)}\n  참가신청 마감 {r['_q'].strftime('%H:%M')} | 투찰마감 {_dt(r['close_dt'])}")
+            keys.append((r["bid_key"], "qual"))
+        parts.append("\n".join(lines))
+
     # 1) 새 공고 (최근 3일 내 공고, 아직 개찰 전)
     new = t[(t["open_date"] >= now) & (notice >= now - pd.Timedelta(days=3))]
     new = new[~new["bid_key"].map(lambda k: (k, "new") in done).astype(bool)].sort_values("open_date")
@@ -157,7 +169,8 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
             limit = r["allowed_regions"] or ("제한없음" if r["allowed_regions_known"] else _e(r["region"]))
             lines.append(f"• {_title(r)}\n  {_e(r['org'])} | 참가지역 {_e(limit)}\n"
                          f"  {'기초' if pd.notna(r['base_amt']) else '추정'} {_won(amt)} | "
-                         f"개찰 {_dt(r['open_dt'])} | {_e(r['contract_method'] or r['method'])}")
+                         f"개찰 {_dt(r['open_dt'])} | {_e(r['contract_method'] or r['method'])}"
+                         + (f"\n  📝 참가신청 마감 {_dt(r['qual_dt'])}" if pd.notna(pd.to_datetime(r.get('qual_dt'), errors='coerce', format='mixed')) else ""))
             keys.append((r["bid_key"], "new"))
         parts.append("\n".join(lines))
 

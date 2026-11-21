@@ -227,6 +227,14 @@ if page == "🏠 오늘의 투찰":
             st.caption(f"{r['org']} · 참가지역 {limit} · 투찰마감 "
                        f"{'-' if pd.isna(r['close_date']) else r['close_date'].strftime('%m/%d %H:%M')} · "
                        f"개찰 {r['open_date'].strftime('%m/%d %H:%M')} · {r['contract_method'] or r['method'] or ''}")
+            qd = pd.to_datetime(r.get("qual_dt"), errors="coerce", format="mixed")
+            if pd.notna(qd) and qd >= now:
+                left = (qd.normalize() - now.normalize()).days
+                txt = f"참가신청 마감 {qd.strftime('%m/%d %H:%M')}"
+                if left <= 1:
+                    st.markdown(f":red[**📝 {txt} ({'오늘' if left == 0 else '내일'})** — 아직 안 했다면 나라장터에서 참가신청하세요]")
+                else:
+                    st.caption(f"📝 {txt} (D-{left})")
             docs = []
             if isinstance(r.get("spec_docs"), str):
                 try:

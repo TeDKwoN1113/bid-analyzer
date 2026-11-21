@@ -15,7 +15,7 @@ def load_dataset() -> pd.DataFrame:
         """
         SELECT b.bid_key, b.bid_no, b.bid_ord, b.name, b.org, b.demand_org, b.region,
                b.main_type, b.method, b.contract_method, b.notice_dt, b.close_dt, b.open_dt, b.est_price,
-               b.lower_rate, b.url, b.spec_docs, b.ntce_kind,
+               b.lower_rate, b.url, b.spec_docs, b.ntce_kind, b.qual_dt, b.begin_dt,
                ba.base_amt AS base_amt_notice, ba.a_value, ba.range_begin, ba.range_end,
                ba.a_apply, ba.pure_cost, ba.a_detail,
                p.plan_price, p.base_amt AS base_amt_open,

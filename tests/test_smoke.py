@@ -138,3 +138,12 @@ def test_revised_and_cancelled_notices():
     assert list(sorted(out.index)) == ["A", "B"]                       # 취소공고 제외
     assert out.at["A", "bid_ord"] == "001" and out.at["A", "close_dt"] == "11/25"  # 최신 차수
     assert out.at["A", "base_amt_notice"] == 100.0                     # 이전 차수 값으로 채움
+
+
+def test_qualification_deadline_reminder(df):
+    db.use_sample(True)
+    k = upcoming(df).iloc[0]["bid_key"]
+    soon = (pd.Timestamp.now() + pd.Timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+    db.execute("UPDATE bids SET qual_dt = :q WHERE bid_key = :k", {"q": soon, "k": k})
+    text, keys = notify.build(analysis.load_dataset())
+    assert (k, "qual") in keys and "참가신청 마감" in text
