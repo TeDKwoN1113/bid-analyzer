@@ -295,6 +295,73 @@ def load_ranks(bid_keys=None) -> pd.DataFrame:
     return df
 
 
+def likely_competitors(ranks: pd.DataFrame, row, df: pd.DataFrame | None = None, top: int = 5) -> tuple[str, pd.DataFrame]:
+    """이 공고에 들어올 가능성이 높은 경쟁사: 같은 기관 → 우리 지역 지역제한 공고 → 전체 순으로
+    과거 개찰순위(상위권)에 자주 나온 업체와 그 업체가 보통 노리는 사정율."""
+    if ranks is None or ranks.empty:
+        return "", pd.DataFrame()
+    pools = []
+    region = db.company()["region"]
+    idx = _ranks_index(ranks, df, region)
+    org_r = idx["by_org"].get(row["org"])
+    if org_r is not None and org_r["bid_key"].nunique() >= 3:
+        pools.append((f"같은 기관({row['org']}) 공고 {org_r['bid_key'].nunique()}건", org_r))
+    if df is not None and region and is_local_bid(row, region):
+        loc_r = idx["loc"]
+        if loc_r is not None and loc_r["bid_key"].nunique() >= 3:
+            pools.append((f"{region} 지역제한 공고 {loc_r['bid_key'].nunique()}건", loc_r))
+    pools.append((f"전체 공고 {ranks['bid_key'].nunique()}건", ranks))
+    label, pool = pools[0]
+    ours = db.company()["bizno"]
+    # 지역·전체 풀은 공고마다 같으므로 요약을 한 번만 계산해 재사용 (기관 풀은 작아서 매번 계산)
+    ck = (id(ranks), len(ranks), label.split(" 공고")[0] if not label.startswith("같은 기관") else None)
+    if ck[2] is not None and ck in _comp_cache:
+        g = _comp_cache[ck]
+    else:
+        g = _summarise_competitors(pool)
+        if ck[2] is not None:
+            if len(_comp_cache) > 16:
+                _comp_cache.clear()
+            _comp_cache[ck] = g
+    if ours:
+        g = g[g["_bizno"].fillna("").str.replace("-", "") != ours]
+    g = g.sort_values(["등장", "10위 이내"], ascending=False).head(top).drop(columns="_bizno")
+    return label, g.round(3)
+
+
+_comp_cache: dict = {}
+_ranks_idx_cache: dict = {}
+
+
+def _ranks_index(ranks: pd.DataFrame, df: pd.DataFrame | None, region: str) -> dict:
+    """개찰순위를 기관별로 나누고 지역제한 공고 부분을 한 번만 계산."""
+    key = (id(ranks), len(ranks), id(df), region)
+    hit = _ranks_idx_cache.get(key)
+    if hit is not None and hit["ranks"] is ranks:
+        return hit
+    loc = None
+    if df is not None and region:
+        loc_keys = set(_context(df, company_keywords(), region)["loc"]["bid_key"])
+        loc = ranks[ranks["bid_key"].isin(loc_keys)]
+    out = {"ranks": ranks, "by_org": dict(tuple(ranks.groupby("org"))), "loc": loc}
+    if len(_ranks_idx_cache) > 4:
+        _ranks_idx_cache.clear()
+    _ranks_idx_cache[key] = out
+    return out
+
+
+def _summarise_competitors(pool: pd.DataFrame) -> pd.DataFrame:
+    key = pool["bizno"].where(pool["bizno"].fillna("") != "", pool["company"])
+    return pool.assign(_k=key).groupby("_k").agg(**{
+        "업체명": ("company", "last"),
+        "_bizno": ("bizno", "last"),
+        "등장": ("bid_key", "nunique"),
+        "10위 이내": ("rank", lambda x: int((x <= 10).sum())),
+        "평균 사정율": ("투찰사정율", "mean"),
+        "편차": ("투찰사정율", "std"),
+    }).reset_index(drop=True)
+
+
 def competitor_stats(ranks: pd.DataFrame, min_count: int = 2) -> pd.DataFrame:
     """업체별 투찰 경향."""
     if ranks.empty:

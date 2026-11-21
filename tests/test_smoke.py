@@ -153,3 +153,10 @@ def test_weekly_report(df):
     db.use_sample(True)
     text = notify.weekly_report(analysis.load_dataset(), days=60)
     assert "주간 성적" in text
+
+
+def test_likely_competitors(df):
+    db.use_sample(True)
+    ranks = analysis.load_ranks()
+    lab, comp = analysis.likely_competitors(ranks, upcoming(df).iloc[0], df)
+    assert lab and not comp.empty and comp["등장"].iloc[0] >= comp["등장"].iloc[-1]

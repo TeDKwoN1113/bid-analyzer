@@ -107,6 +107,12 @@ def _load(sample: bool):
 
 
 raw = _load(use_sample)
+
+
+@st.cache_data(ttl=600)
+def _ranks(sample: bool):
+    db.use_sample(sample)
+    return analysis.load_ranks()
 df = analysis.apply_filters(
     raw, keywords=keywords, regions=regions,
     min_amt=amt_range[0] * 1e8 or None, max_amt=amt_range[1] * 1e8,
@@ -278,6 +284,18 @@ if page == "🏠 오늘의 투찰":
                 st.markdown("최근 비슷한 공고에 이 사정율로 넣었다면  \n" + "  \n".join(
                     f"– {x['공고명'][:28]} ({x['개찰일']}): 실제 {x['실제']:.2f} / 낙찰자 {x['1순위']:.2f} → **{x['결과']}**"
                     for x in ex))
+            with st.expander("🏢 예상 경쟁사"):
+                lab, comp = analysis.likely_competitors(_ranks(use_sample), r, raw)
+                if comp.empty:
+                    st.caption("개찰순위 데이터가 쌓이면 표시됩니다.")
+                else:
+                    st.caption(f"기준: {lab}의 개찰 상위권에 자주 나온 업체")
+                    st.dataframe(comp, hide_index=True, use_container_width=True,
+                                 column_config={"평균 사정율": st.column_config.NumberColumn(format="%.3f"),
+                                                "편차": st.column_config.NumberColumn(format="%.3f")})
+                    near = comp[(comp["평균 사정율"] - pk["사정율"]).abs() <= 0.1]
+                    if len(near):
+                        st.caption("⚠️ 추천 사정율 근처(±0.1%p)를 자주 노리는 업체: " + ", ".join(near["업체명"].astype(str)))
             with st.expander("다른 후보 · 신뢰도 기준"):
                 for s_, a_, p_ in pk["후보"][1:]:
                     st.write(f"- {s_:.2f}% → {a_:,}원 (과거 낙찰확률 {p_}%)")
