@@ -32,6 +32,13 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-collector.txt
       - run: pip install -r requirements-collector.txt
+      # 분석용 표를 실행 사이에 보관 → 원격 DB 에서 최근 공고만 받음 (Neon 무료 전송량 5GB/월 절약)
+      - name: 분석 표 캐시 불러오기
+        uses: actions/cache/restore@v4
+        with:
+          path: data/cache
+          key: dscache-${{ github.run_id }}
+          restore-keys: dscache-
       - name: 빠른 수집 (낮 시간)
         if: github.event.schedule == '7 0,4,8 * * 1-5'
         run: python collector.py --quick
@@ -41,6 +48,12 @@ jobs:
       - name: 알림 보내기
         if: always()
         run: python notify.py
+      - name: 분석 표 캐시 저장
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/cache
+          key: dscache-${{ github.run_id }}
       - name: 실패 알림
         if: failure()
         run: python notify.py --alert "자동 수집 중 오류가 났습니다. 확인 주소 ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

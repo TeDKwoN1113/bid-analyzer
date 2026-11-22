@@ -130,7 +130,7 @@ def _load(sample: bool):
 raw = _load(use_sample)
 
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=3600)
 def _ranks(sample: bool):
     db.use_sample(sample)
     return analysis.load_ranks()

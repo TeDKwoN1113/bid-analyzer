@@ -9,10 +9,7 @@ import db
 from config import load_settings
 
 
-def load_dataset() -> pd.DataFrame:
-    """공고 + 기초금액 + 예정가격 + 개찰결과 + 낙찰자를 공고 단위로 합친 표."""
-    df = db.query_df(
-        """
+_BASE_SQL = """
         SELECT b.bid_key, b.bid_no, b.bid_ord, b.name, b.org, b.demand_org, b.region,
                b.main_type, b.method, b.contract_method, b.notice_dt, b.close_dt, b.open_dt, b.est_price,
                b.lower_rate, b.url, b.spec_docs, b.ntce_kind, b.qual_dt, b.begin_dt,
@@ -26,14 +23,88 @@ def load_dataset() -> pd.DataFrame:
         LEFT JOIN plans p ON p.bid_key = b.bid_key
         LEFT JOIN openings o ON o.bid_key = b.bid_key
         LEFT JOIN results r ON r.bid_key = b.bid_key
-        """
-    )
+"""
+# 최근 공고만 다시 받는 조건 (개찰 결과·낙찰자는 개찰 후 2주 안에 채워짐)
+_RECENT_WHERE = "WHERE b.open_dt IS NULL OR b.open_dt >= :cut OR b.notice_dt >= :cut"
+CACHE_FULL_DAYS = 7      # 이 주기로 전체를 새로 받음 (삭제·정정 반영)
+CACHE_MARGIN_DAYS = 14   # 마지막으로 받은 날보다 이만큼 앞부터 다시 받음
+_mem: dict = {}
+
+
+def _cache_path() -> str:
+    import hashlib
+    import os
+    d = os.environ.get("BID_CACHE_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "cache")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "ds_" + hashlib.md5(db.url().encode()).hexdigest()[:10] + ".pkl")
+
+
+def _raw_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """(공고 합친 표, 참가지역, 면허제한) — 원격 DB 전송량을 줄이려고 파일에 보관하고 최근 공고만 새로 받음."""
+    import os
+    import pickle
+    path = _cache_path()
+    now = pd.Timestamp.now()
+    cache = None
+    if db.is_remote() and os.path.exists(path):
+        try:
+            with open(path, "rb") as f:
+                cache = pickle.load(f)
+            if (now - cache["full_at"]).days >= CACHE_FULL_DAYS:
+                cache = None
+        except Exception:  # noqa: BLE001  손상된 파일은 무시하고 전체 다시 받기
+            cache = None
+    if cache is None:
+        base = db.query_df(_BASE_SQL)
+        regs = db.query_df("SELECT bid_key, region FROM regions")
+        lics = db.query_df("SELECT bid_key, license FROM licenses")
+        cache = {"full_at": now, "at": now, "base": base, "regions": regs, "licenses": lics}
+    else:
+        cut = (cache["at"] - pd.Timedelta(days=CACHE_MARGIN_DAYS)).strftime("%Y-%m-%d")
+        p = {"cut": cut}
+        base_new = db.query_df(_BASE_SQL + _RECENT_WHERE, p)
+        sub = f"SELECT b.bid_key FROM bids b {_RECENT_WHERE}"
+        regs_new = db.query_df(f"SELECT bid_key, region FROM regions WHERE bid_key IN ({sub})", p)
+        lics_new = db.query_df(f"SELECT bid_key, license FROM licenses WHERE bid_key IN ({sub})", p)
+        keys = set(base_new["bid_key"])
+        cache["base"] = pd.concat([cache["base"][~cache["base"]["bid_key"].isin(keys)], base_new], ignore_index=True)
+        for name, new in (("regions", regs_new), ("licenses", lics_new)):
+            old = cache[name]
+            cache[name] = pd.concat([old[~old["bid_key"].isin(keys)], new], ignore_index=True)
+        cache["at"] = now
+    if db.is_remote():
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "wb") as f:
+                pickle.dump(cache, f)
+            os.replace(tmp, path)
+        except OSError:
+            pass
+    return cache["base"].copy(), cache["regions"], cache["licenses"]
+
+
+def load_dataset() -> pd.DataFrame:
+    """공고 + 기초금액 + 예정가격 + 개찰결과 + 낙찰자를 공고 단위로 합친 표.
+
+    같은 프로세스에서 1분 안에 다시 부르면 메모리 값을 재사용 (원격 DB 전송량 절약)."""
+    import time
+    key = (db.url(), db.WRITES["n"])
+    hit = _mem.get(key)
+    if hit and time.time() - hit[0] < 60:
+        return hit[1]
+    df = _build_dataset()
+    _mem.clear()
+    _mem[key] = (time.time(), df)
+    return df
+
+
+def _build_dataset() -> pd.DataFrame:
+    df, regs, lics = _raw_frames()
     if df.empty:
         return df
     df = _latest_order(df)
     # 참가가능지역·면허제한 (공고별로 여러 개 → 쉼표로 묶음)
-    for table, col in (("regions", "region"), ("licenses", "license")):
-        t = db.query_df(f"SELECT bid_key, {col} FROM {table}")
+    for table, col, t in (("regions", "region", regs), ("licenses", "license", lics)):
         joined = t.groupby("bid_key")[col].agg(lambda x: ", ".join(sorted(set(x)))) if len(t) else pd.Series(dtype=str)
         out = "allowed_regions" if table == "regions" else "licenses"
         df[out] = df["bid_key"].map(joined).fillna("")

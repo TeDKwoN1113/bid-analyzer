@@ -172,10 +172,16 @@ def _init(eng) -> None:
             c.execute(text("DELETE FROM collect_days WHERE op = 'base_amount'"))
 
 
+WRITES = {"n": 0}  # 저장할 때마다 증가 → 분석 표 메모리 캐시 무효화용
+_NO_INVALIDATE = {"kv", "collect_log", "notified", "pick_log", "collect_days"}
+
+
 def upsert_many(table: str, rows: list[dict]) -> int:
     """여러 행을 한 번에 저장(같은 키가 있으면 덮어씀)."""
     if not rows:
         return 0
+    if table not in _NO_INVALIDATE:
+        WRITES["n"] += 1
     cols = list(rows[0].keys())
     pk = TABLES[table][1]
     ph = ", ".join(f":{c}" for c in cols)
@@ -203,6 +209,7 @@ def query_df(sql: str, params: dict | None = None) -> pd.DataFrame:
 
 
 def execute(sql: str, params: dict | None = None) -> None:
+    WRITES["n"] += 1
     with engine().begin() as c:
         c.execute(text(sql), params or {})
 

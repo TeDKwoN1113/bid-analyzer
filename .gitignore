@@ -1,7 +1,8 @@
-data/
-settings.json
-venv/
-__pycache__/
-.streamlit/secrets.toml
 *.pyc
 .pytest_cache/
+.streamlit/secrets.toml
+__pycache__/
+data/
+data/cache/
+settings.json
+venv/

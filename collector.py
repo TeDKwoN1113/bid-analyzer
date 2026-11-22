@@ -421,7 +421,8 @@ def update_my_bids(progress=None) -> str:
     if not c["bizno"]:
         return "회사 사업자번호 미등록 → 건너뜀"
     mb = db.query_df("SELECT bid_key FROM my_bids WHERE my_rank IS NULL")
-    opened = set(db.query_df("SELECT bid_key FROM openings WHERE participants > 0")["bid_key"])
+    opened = set(db.query_df("SELECT o.bid_key FROM openings o JOIN my_bids m ON m.bid_key = o.bid_key "
+                             "WHERE o.participants > 0")["bid_key"])
     found, checked, stopped = 0, 0, ""
     for key in mb["bid_key"]:
         if key not in opened:
