@@ -86,6 +86,12 @@ TABLES = {
         base_amt DOUBLE PRECISION, approx_amt DOUBLE PRECISION, contract_amt DOUBLE PRECISION,
         restrict_text TEXT, qualification TEXT, location TEXT, files TEXT, updated_at TEXT
     """, ["bid_no"]),
+    # 한전 개찰 결과 (SRM 에서 보고 직접 기록)
+    "kepco_results": ("""
+        bid_no TEXT, plan_price DOUBLE PRECISION, first_amt DOUBLE PRECISION, lower_rate DOUBLE PRECISION,
+        a_value DOUBLE PRECISION, participants INTEGER, our_amount DOUBLE PRECISION, our_rank INTEGER,
+        memo TEXT, created_at TEXT
+    """, ["bid_no"]),
     "kv": ("""
         k TEXT, v TEXT
     """, ["k"]),

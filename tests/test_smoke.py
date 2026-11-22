@@ -165,6 +165,19 @@ def test_kepco_mapping_and_stats(df):
     assert st_ and 98 < st_["중앙"] < 102
     text, keys = notify.build(df)
     assert any(k.startswith("KEPCO-") for k, _ in keys)
+    # 직접 기록한 개찰 결과 → 사정율·1순위 사정율 → 추천
+    past = kb[kb["end_dt"] < pd.Timestamp.now()].head(15)
+    rows = []
+    for i, (_, r) in enumerate(past.iterrows()):
+        plan = r["base_amt"] * (0.995 + 0.0007 * i)
+        rows.append({"bid_no": r["bid_no"], "plan_price": plan, "first_amt": plan * 0.88, "lower_rate": 87.745,
+                     "a_value": 0, "participants": 50, "created_at": "x"})
+    db.upsert_many("kepco_results", rows)
+    kb2 = kepco.load()
+    one = kb2.set_index("bid_no").loc[rows[0]["bid_no"]]
+    assert abs(one["sajung"] - 99.5) < 0.01 and one["winner_sajung"] > one["sajung"]
+    rec = kepco.recommend(kb2, None)
+    assert rec and 98 < rec["사정율"] < 102
 
 
 def test_backtest_and_tune_rules(df):

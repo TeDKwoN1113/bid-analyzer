@@ -174,7 +174,37 @@ def load() -> pd.DataFrame:
     # 사정금액이 기초금액과 똑같으면 개찰 결과(예정가격)가 아니라 공고 때 값 → 사정율로 쓰지 않음
     same = (df["approx_amt"] - df["base_amt"]).abs() < 1
     df.loc[same | ~df["sajung"].between(90, 110), "sajung"] = None
+    # 직접 기록한 개찰 결과(예정가격·1순위 금액)가 있으면 그것으로 사정율·1순위 사정율 계산
+    res = db.query_df("SELECT * FROM kepco_results")
+    df["winner_sajung"] = np.nan
+    df["participants"] = np.nan
+    if len(res):
+        df = df.merge(res.rename(columns={"plan_price": "r_plan", "first_amt": "r_first", "lower_rate": "r_lr",
+                                          "a_value": "r_a", "participants": "r_part", "memo": "r_memo",
+                                          "created_at": "r_at"}), on="bid_no", how="left")
+        rec = df["r_plan"].notna() & df["base_amt"].notna()
+        df.loc[rec, "sajung"] = df.loc[rec, "r_plan"] / df.loc[rec, "base_amt"] * 100
+        a = df["r_a"].fillna(0)
+        implied = (df["r_first"] - a) / (df["r_lr"] / 100) + a
+        df["winner_sajung"] = (implied / df["base_amt"] * 100).where(df["r_first"].notna() & df["r_lr"].notna())
+        df["participants"] = df["r_part"]
+        df.loc[~df["winner_sajung"].between(90, 110), "winner_sajung"] = np.nan
+        df.loc[~df["sajung"].between(90, 110), "sajung"] = np.nan
     return df
+
+
+def recommend(df: pd.DataFrame, row, region: str | None = None) -> dict | None:
+    """기록된 한전 개찰 결과로 사정율별 낙찰확률을 계산해 추천 (나라장터와 같은 방식). 10건 미만이면 None."""
+    import analysis
+    hist = df[df["sajung"].notna() & df["winner_sajung"].notna()]
+    if row is not None and row.get("place") and (hist["place"] == row["place"]).sum() >= 30:
+        hist = hist[hist["place"] == row["place"]]
+    if analysis.n_windows(hist) < 10:
+        return None
+    pts = analysis.best_points(analysis.win_curve(hist), top=1)
+    if not pts:
+        return None
+    return {"사정율": round(pts[0]["사정율"], 2), "낙찰확률": pts[0]["낙찰확률"], "n": len(hist)}
 
 
 _cache: dict = {}
@@ -239,7 +269,7 @@ def is_local(row, region: str) -> bool:
 
 
 def sajung_stats(df: pd.DataFrame, row=None, region: str | None = None) -> dict | None:
-    """과거 한전 공사 공고의 실제 사정율(사정금액/예비가격기초금액) 분포. 비슷한 공고(같은 사업소 → 지역 → 전체) 우선."""
+    """과거 한전 공사 공고의 실제 사정율(예정가격/예비가격기초금액) 분포. 비슷한 공고(같은 사업소 → 지역 → 전체) 우선."""
     done = df[df["sajung"].notna() & is_construction(df)]
     if done.empty:
         return None

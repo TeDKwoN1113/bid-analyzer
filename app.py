@@ -797,6 +797,71 @@ elif page == "🔌 한전 입찰":
             st.dataframe(by_place, hide_index=True, use_container_width=True,
                          column_config={"중앙": st.column_config.NumberColumn(format="%.3f"),
                                         "평균": st.column_config.NumberColumn(format="%.3f")})
+    if not kb_all.empty:
+        reg_k = db.company()["region"] or "울산"
+        cons = kepco.filter_bids(kb_all, region=reg_k, local_only=False)
+        nowk = pd.Timestamp.now()
+
+        def _lab(r):
+            d = "" if pd.isna(r["end_dt"]) else r["end_dt"].strftime("%m/%d")
+            return f"{d} {r['name'][:40]} ({r['bid_no']})"
+
+        st.subheader("🧮 한전 투찰금액 계산")
+        upk = cons[cons["end_dt"] >= nowk].sort_values("end_dt")
+        if upk.empty:
+            st.caption("진행 중인 한전 공사 공고가 없습니다.")
+        else:
+            opt = st.selectbox("공고", upk.index, format_func=lambda i: _lab(upk.loc[i]), key="kc_bid")
+            r = upk.loc[opt]
+            rec = kepco.recommend(kb_all, r, reg_k)
+            c1, c2, c3, c4 = st.columns(4)
+            base_k = c1.number_input("예비가격 기초금액(원)", 0.0, 1e12,
+                                     float(r["base_amt"]) if pd.notna(r["base_amt"]) else 0.0, 1000.0, format="%.0f")
+            lr_k = c2.number_input("하한율(%)", 0.0, 100.0, 87.745, 0.001, format="%.3f",
+                                   help="공고문(입찰공고서)의 낙찰하한율")
+            a_k = c3.number_input("A값(원)", 0.0, 1e12, 0.0, 1000.0, format="%.0f", help="공고문에 있으면 입력")
+            s_k = c4.number_input("사정율(%)", 95.0, 105.0, float(rec["사정율"]) if rec else 100.0, 0.01, format="%.2f")
+            if base_k > 0:
+                st.metric("💰 투찰금액", f"{analysis.bid_amount(base_k, s_k, lr_k, a_k):,}원")
+            if rec:
+                st.caption(f"추천 사정율 {rec['사정율']:.2f}% — 기록된 한전 개찰 결과 {rec['n']}건 기준 과거 낙찰확률 {rec['낙찰확률']:.1f}%")
+            else:
+                st.caption("한전 개찰 결과가 10건 이상 기록되면 추천 사정율이 나옵니다. 그 전에는 사정율을 직접 정하세요.")
+
+        st.subheader("📝 한전 개찰 결과 기록")
+        st.caption("SRM에서 개찰 결과(예정가격·1순위 금액)를 보고 적어 두면, 한전 사정율·낙찰확률 분석에 쓰입니다. "
+                   "우리가 참가하지 않은 공고도 결과를 볼 수 있으면 적어 주세요. 많을수록 정확해집니다.")
+        pastk = cons[(cons["end_dt"] < nowk) & (cons["end_dt"] >= nowk - pd.Timedelta(days=120))] \
+            .sort_values("end_dt", ascending=False)
+        if pastk.empty:
+            st.caption("최근 120일 안에 마감된 한전 공사 공고가 없습니다.")
+        else:
+            with st.form("kepco_result"):
+                opt2 = st.selectbox("공고", pastk.index, format_func=lambda i: _lab(pastk.loc[i]))
+                f1, f2, f3 = st.columns(3)
+                plan_k = f1.number_input("예정가격(원)", 0.0, 1e12, 0.0, 1000.0, format="%.0f")
+                first_k = f2.number_input("1순위(낙찰) 금액(원)", 0.0, 1e12, 0.0, 1000.0, format="%.0f")
+                part_k = f3.number_input("참가업체 수", 0, 10000, 0)
+                g1, g2, g3, g4 = st.columns(4)
+                lr2 = g1.number_input("하한율(%)", 0.0, 100.0, 87.745, 0.001, format="%.3f")
+                a2 = g2.number_input("A값(원)", 0.0, 1e12, 0.0, 1000.0, format="%.0f")
+                our_k = g3.number_input("우리 투찰금액(원, 선택)", 0.0, 1e12, 0.0, 1000.0, format="%.0f")
+                rank_k = g4.number_input("우리 순위(선택)", 0, 10000, 0)
+                if st.form_submit_button("저장", type="primary"):
+                    if plan_k <= 0:
+                        st.error("예정가격을 입력하세요.")
+                    else:
+                        db.upsert_many("kepco_results", [{
+                            "bid_no": pastk.loc[opt2, "bid_no"], "plan_price": plan_k,
+                            "first_amt": first_k or None, "lower_rate": lr2, "a_value": a2,
+                            "participants": part_k or None, "our_amount": our_k or None, "our_rank": rank_k or None,
+                            "memo": "", "created_at": db.now()}])
+                        b0 = pastk.loc[opt2, "base_amt"]
+                        msg = f" (사정율 {plan_k / b0 * 100:.3f}%)" if pd.notna(b0) and b0 else ""
+                        st.success("저장했습니다" + msg)
+        nrec = int(db.query_df("SELECT COUNT(*) AS n FROM kepco_results")["n"].iloc[0])
+        st.caption(f"지금까지 기록한 한전 개찰 결과: {nrec}건")
+
     with st.expander("🔍 한전 API 원본 확인 (항목 점검용)"):
         if st.button("최근 7일 원본 1건 보기", disabled=not settings.get("kepco_api_key")):
             try:
