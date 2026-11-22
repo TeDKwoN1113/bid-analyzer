@@ -202,7 +202,7 @@ def test_d2b_mapping_and_flow(df, monkeypatch):
     lst = {"pblancYear": "2026", "pblancSeCode": "1", "pblancNo": "2026-18396", "pblancOdr": "0", "cntrwkNo": "C1",
            "orntCode": "9001", "cntrwkNm": "울산 OO부대 전기공사", "ornt": "국군재정관리단", "busiDivs": "공사",
            "pblancDate": "20261120", "opengDt": soon, "biddocPresentnClosDt": soon, "baseAmnt": "300,000,000",
-           "g2bPblancNo": ""}
+           "g2bPblancNo": "2026HFD00222026-18306"}   # 방위사업청 자체 번호 (나라장터 번호 아님)
     det = {"areaLmttList": "울산광역시", "lcnsLmttList": "전기공사업", "scsbidLwltRt": "87.745", "estmPrce": "272727272",
            "inanAmnt": "1000000", "inheAmnt": "800000", "safeAmnt": "2000000", "cntrwkSe": "전기"}
     calls = []
@@ -231,6 +231,7 @@ def test_d2b_mapping_and_flow(df, monkeypatch):
     tb = d2b.map_result({**lst, "opengDate": "20261123"}, {"bsisPreparPc": "300000000", "scsbidEntrpsBsnmRegistNo": "1111111111",
                         "scsbidEntrpsNm": "가"}, pre, bidders)
     assert tb["plans"][0]["plan_price"] == 300_250_000
+    assert not d2b.on_g2b("2026HFD00222026-18306") and d2b.on_g2b(df["bid_no"].iloc[0])
     assert tb["openings"][0]["first_amt"] == 265000000 and tb["results"][0]["win_amt"] == 265000000
     assert len(tb["ranks"]) == 2
 

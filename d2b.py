@@ -121,6 +121,19 @@ def _split_list(x) -> list[str]:
     return [p.strip() for p in re.split(r"[,/|;\n]", str(x or "")) if p.strip()]
 
 
+def on_g2b(no) -> bool:
+    """g2bPblancNo 가 실제 나라장터 공고번호로 우리 자료에 있는지.
+    (방위사업청은 이 칸에 '년도+기관코드+공고번호+공사번호' 같은 자체 번호를 넣기도 해서 값이 있다고 나라장터 공고는 아님)"""
+    no = str(no or "").strip()
+    if not no:
+        return False
+    cands = {no, no.split("-")[0]}
+    for c in cands:
+        if len(db.query_df("SELECT 1 AS x FROM bids WHERE bid_no = :n", {"n": c})):
+            return True
+    return False
+
+
 def is_target(name: str, extra: str = "", keywords=None) -> bool:
     import analysis
     kw = keywords or analysis.company_keywords()
@@ -242,8 +255,10 @@ def collect_notices(d1: date, d2: date, progress=None, budget: int = MAX_DETAIL)
     done = _done("d2b_notice")
     saved = 0
     for r in lst:
-        if str(r.get("busiDivs", "공사")).find("공사") < 0 or r.get("g2bPblancNo"):
+        if str(r.get("busiDivs", "공사")).find("공사") < 0 or "용역" in str(r.get("cntrwkNm", "")):
             continue
+        if on_g2b(r.get("g2bPblancNo")):
+            continue   # 나라장터에도 올라온 공고 → 나라장터 쪽 자료 사용
         key = keys(r)[0]
         if key in done:
             continue
@@ -283,7 +298,7 @@ def collect_results(d1: date, d2: date, progress=None, budget: int = MAX_DETAIL)
     saved = 0
     for r in sorted(lst, key=lambda x: str(x.get("opengDt") or x.get("opengDate") or ""), reverse=True):
         key = keys(r)[0]
-        if key in done or not (key in known or is_target(r.get("cntrwkNm"))):
+        if key in done or "용역" in str(r.get("cntrwkNm", "")) or not (key in known or is_target(r.get("cntrwkNm"))):
             continue
         if budget <= 0:
             break
