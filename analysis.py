@@ -51,15 +51,15 @@ def _raw_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         try:
             with open(path, "rb") as f:
                 cache = pickle.load(f)
-            if (now - cache["full_at"]).days >= CACHE_FULL_DAYS:
-                cache = None
+            if (now - cache["full_at"]).days >= CACHE_FULL_DAYS or cache.get("sql") != _BASE_SQL:
+                cache = None   # 오래됐거나 받아오는 항목이 바뀌었으면 전체 다시
         except Exception:  # noqa: BLE001  손상된 파일은 무시하고 전체 다시 받기
             cache = None
     if cache is None:
         base = db.query_df(_BASE_SQL)
         regs = db.query_df("SELECT bid_key, region FROM regions")
         lics = db.query_df("SELECT bid_key, license FROM licenses")
-        cache = {"full_at": now, "at": now, "base": base, "regions": regs, "licenses": lics}
+        cache = {"full_at": now, "at": now, "base": base, "regions": regs, "licenses": lics, "sql": _BASE_SQL}
     else:
         cut = (cache["at"] - pd.Timedelta(days=CACHE_MARGIN_DAYS)).strftime("%Y-%m-%d")
         p = {"cut": cut}
