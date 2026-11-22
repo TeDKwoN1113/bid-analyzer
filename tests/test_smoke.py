@@ -97,6 +97,18 @@ def test_notify_build_and_my_bids(df):
     assert v is not None
 
 
+def test_notify_scope_local(df):
+    d = pd.DataFrame({"allowed_regions": ["울산광역시", "", "", "부산광역시, 울산광역시"],
+                      "region": ["", "서울특별시", "", ""], "org": ["", "서울시", "울산광역시 남구", ""],
+                      "demand_org": ""})
+    assert analysis.local_mask(d, "울산").tolist() == [True, False, True, True]
+    db.set_kv("notify_scope", "all")
+    _, k_all = notify.build(df)
+    db.set_kv("notify_scope", "local")
+    _, k_loc = notify.build(df)
+    assert notify.scope() == "local" and len(k_loc) <= len(k_all)
+
+
 def test_backtest_and_tune_rules(df):
     s, d = analysis.backtest(df, ["전기"], test_days=120, max_tests=20)
     assert not s.empty and set(s["방식"]) <= set(analysis.STRATEGIES.values())

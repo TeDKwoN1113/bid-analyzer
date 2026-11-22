@@ -895,8 +895,18 @@ elif page == "⚙️ 설정 · API 점검":
     kw_n = settings["notify_keywords"] or analysis.company_keywords()
     rg_n = settings["notify_regions"] or settings["default_regions"]
     mx_n = settings["notify_max_amount"] or settings["max_amount"]
-    st.caption(f"알림 조건: 업종 {', '.join(kw_n)} · 지역 {', '.join(rg_n) or '전국'} · {mx_n / 1e8:,.0f}억 미만 "
-               "(위의 기본 키워드/금액 설정을 따릅니다)")
+    cur_scope = notify.scope()
+    reg_name = db.company()["region"] or "우리 지역"
+    labels = {k: v.replace("울산", reg_name) for k, v in notify.SCOPES.items()}
+    new_scope = st.radio("알림 받을 공고 범위", list(labels), index=list(labels).index(cur_scope),
+                         format_func=labels.get, horizontal=True,
+                         help="우리 지역: 참가지역에 우리 지역이 포함되거나 우리 지역 기관이 낸 공고. "
+                              "전국: 지역제한 없는 다른 지역 공고까지 (개찰 결과 포함)")
+    if new_scope != cur_scope:
+        db.set_kv("notify_scope", new_scope)
+        st.success(f"알림 범위를 '{labels[new_scope]}'(으)로 바꿨습니다. 다음 알림부터 적용됩니다.")
+    st.caption(f"알림 조건: {labels[new_scope]} · 업종 {', '.join(kw_n)} · 지역 키워드 {', '.join(rg_n) or '없음'} · "
+               f"{mx_n / 1e8:,.0f}억 미만 (위의 기본 키워드/금액 설정을 따릅니다)")
     b1, b2, b3 = st.columns(3)
     if b1.button("텔레그램 chat_id 찾기"):
         if not settings.get("telegram_bot_token"):

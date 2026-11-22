@@ -115,6 +115,15 @@ def _title(r) -> str:
     return f"<b>{name}</b>"
 
 
+SCOPES = {"local": "우리 지역(울산) 공고만", "all": "참가 가능한 전국 공고 전체"}
+
+
+def scope() -> str:
+    """알림 범위 (기본: 우리 지역만). 사이트 설정에서 바꿈."""
+    v = db.get_kv("notify_scope") or "local"
+    return v if v in SCOPES else "local"
+
+
 DETAIL_MAX = 15  # 새 공고·개찰 결과는 한 번에 이만큼만 자세히 (나머지는 건수만)
 
 
@@ -133,6 +142,8 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
     if df.empty:
         return "", []
     t = analysis.apply_filters(df, keywords=kw, regions=rg, max_amt=mx, eligible_only=True)
+    if scope() == "local":
+        t = t[analysis.local_mask(t)]
     sent = db.query_df("SELECT bid_key, kind FROM notified")
     done = set(zip(sent["bid_key"], sent["kind"]))
     now = pd.Timestamp.now()

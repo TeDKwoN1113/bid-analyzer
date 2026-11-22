@@ -450,6 +450,18 @@ def is_local_bid(row, region: str | None = None) -> bool:
     return reg in place
 
 
+def local_mask(df: pd.DataFrame, region: str | None = None) -> pd.Series:
+    """우리 지역 공고: 참가지역에 우리 지역이 들어 있거나, 공사지역·발주기관이 우리 지역."""
+    reg = region if region is not None else db.company()["region"]
+    if not reg or df.empty:
+        return pd.Series(True, index=df.index)
+    place = df["region"].fillna("") + " " + df["org"].fillna("") + " " + df["demand_org"].fillna("")
+    m = place.str.contains(reg, regex=False)
+    if "allowed_regions" in df:
+        m |= df["allowed_regions"].fillna("").str.contains(reg, regex=False)
+    return m
+
+
 def local_region_history(done: pd.DataFrame, region: str) -> pd.DataFrame:
     """우리 지역 지역제한 공고 (지역 정보를 아직 못 받은 공고는 공사지역·기관명으로 판단)."""
     allowed = done["allowed_regions"] if "allowed_regions" in done else pd.Series("", index=done.index)
