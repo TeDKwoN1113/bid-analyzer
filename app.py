@@ -734,14 +734,22 @@ elif page == "🔌 한전 입찰":
                 st.error(f"실패: {e}")
     if not kb_all.empty:
         reg = db.company()["region"] or "울산"
-        local_only = k2.toggle(f"{reg} 관련 공고만", value=True)
+        scope_k = k2.radio("지역", [f"참가 가능 ({reg} + 전국)", f"{reg}만", "전체"], horizontal=True,
+                           label_visibility="collapsed")
+        local_only = not scope_k.startswith("전체")
         kw_extra = st.text_input("공고명 키워드 (쉼표 구분, 비우면 전기·배전·송전 등 기본)", "")
         kws = [x.strip() for x in kw_extra.split(",") if x.strip()] or None
-        kb = kepco.filter_bids(kb_all, region=reg, keywords=kws, local_only=local_only)
+        kb = kepco.filter_bids(kb_all, region=reg, keywords=kws, local_only=local_only,
+                               include_national=scope_k.startswith("참가"))
         now = pd.Timestamp.now()
         dl = kb["end_dt"].fillna(kb["attend_close_dt"])
         up = kb[dl >= now].assign(_dl=dl).sort_values("_dl")
-        st.markdown(f"진행 중 **{len(up)}건** · 1년간 공사 공고 **{len(kb)}건** · 사정율 확인 **{kb['sajung'].notna().sum()}건**")
+        n_sj = int(kb["sajung"].notna().sum())
+        st.markdown(f"진행 중 **{len(up)}건** · 받은 공사 공고 **{len(kb)}건** · 사정율 확인 **{n_sj}건**")
+        if n_sj == 0:
+            st.info("한전 API는 개찰 결과(예정가격)를 주지 않아서 아직 사정율 분석은 할 수 없습니다. "
+                    "지금은 공고·마감 일정 확인과 텔레그램 알림용으로 쓰세요. 투찰금액은 공고문의 하한율·A값으로 "
+                    "🧮 투찰 계산기에서 계산할 수 있습니다.")
         rows_k = []
         for _, r in up.head(100).iterrows():
             stt = kepco.sajung_stats(kb_all, r, reg) if pd.notna(r["base_amt"]) else None
@@ -755,7 +763,7 @@ elif page == "🔌 한전 입찰":
                 pass
             rows_k.append({
                 "D-day": f"D-{max((r['_dl'].normalize() - now.normalize()).days, 0)}",
-                "공고명": r["name"], "발주": f"{r['발주사']} {r['place'] or ''}".strip(),
+                "공고명": r["name"], "지역": r.get("지역", ""), "발주": f"{r['발주사']} {r['place'] or ''}".strip(),
                 "추정가격": won(r["presumed_price"]) if pd.notna(r["presumed_price"]) else "",
                 "기초금액": won(r["base_amt"]) if pd.notna(r["base_amt"]) else "미공개",
                 "입찰신청마감": "" if pd.isna(r["attend_close_dt"]) else r["attend_close_dt"].strftime("%m/%d %H:%M"),
@@ -766,11 +774,15 @@ elif page == "🔌 한전 입찰":
                 "공고문": files[0][1] if files else None,
             })
         if rows_k:
-            st.dataframe(pd.DataFrame(rows_k), hide_index=True, use_container_width=True,
+            tbl = pd.DataFrame(rows_k)
+            if n_sj == 0:
+                tbl = tbl.drop(columns=["과거 사정율(중앙)", "예정가격 예상(중앙)"])
+            st.dataframe(tbl, hide_index=True, use_container_width=True,
                          column_config={"공고문": st.column_config.LinkColumn("공고문", display_text="열기"),
                                         "공고명": st.column_config.TextColumn(width="large")})
-            st.caption("예정가격 예상 = 기초금액 × 과거 사정율 중앙값. 투찰금액은 (예정가격 − A값) × 하한율 + A값 이므로 "
-                       "공고문의 하한율·A값을 🧮 투찰 계산기에 넣어 계산하세요.")
+            if n_sj:
+                st.caption("예정가격 예상 = 기초금액 × 과거 사정율 중앙값. 투찰금액은 (예정가격 − A값) × 하한율 + A값 이므로 "
+                           "공고문의 하한율·A값을 🧮 투찰 계산기에 넣어 계산하세요.")
         else:
             st.info("진행 중인 공고가 없습니다.")
         done_k = kb[kb["sajung"].notna()]

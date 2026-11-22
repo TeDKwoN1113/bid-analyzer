@@ -11,6 +11,7 @@ import json
 import re
 from datetime import date, datetime, timedelta
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -170,7 +171,9 @@ def load() -> pd.DataFrame:
     df["낙찰방법"] = df["bid_type"].map(BID_TYPES).fillna(df["bid_type"])
     df["발주사"] = df["company"].map(COMPANIES).fillna(df["company"])
     df["sajung"] = (df["approx_amt"] / df["base_amt"] * 100).where(df["base_amt"].notna())
-    df.loc[~df["sajung"].between(90, 110), "sajung"] = None   # 사정금액이 예정가격이 아닌 경우 제외
+    # 사정금액이 기초금액과 똑같으면 개찰 결과(예정가격)가 아니라 공고 때 값 → 사정율로 쓰지 않음
+    same = (df["approx_amt"] - df["base_amt"]).abs() < 1
+    df.loc[same | ~df["sajung"].between(90, 110), "sajung"] = None
     return df
 
 
@@ -189,22 +192,45 @@ def load_cached() -> pd.DataFrame:
 
 
 def is_construction(df: pd.DataFrame) -> pd.Series:
-    return (df["item_type"].fillna("") == "Construction") | \
-           ((df["purchase_type"].fillna("") == "ConstructionService") & df["name"].fillna("").str.contains("공사"))
+    """공사만 (이름에 '공사'가 있어도 '용역'이면 제외: 예) 배전공사 현장 안전감시 위탁용역)."""
+    name = df["name"].fillna("")
+    item = df["item_type"].fillna("")
+    service = name.str.contains("용역") | (item == "Service")
+    return ~service & ((item == "Construction") |
+                       ((df["purchase_type"].fillna("") == "ConstructionService") & name.str.contains("공사")))
 
 
-def filter_bids(df: pd.DataFrame, region: str | None = None, keywords=None, local_only: bool = False) -> pd.DataFrame:
-    """공사 + 업종 키워드 (+ 지역)."""
+SIDO = ["서울", "부산", "대구", "인천", "광주", "대전", "울산", "세종", "경기", "강원", "충청", "충북", "충남",
+        "전라", "전북", "전남", "경상", "경북", "경남", "제주"]
+
+
+def region_scope(df: pd.DataFrame, region: str) -> pd.Series:
+    """'local'(우리 지역 언급) / 'national'(지역 제한 없음) / 'other'(다른 지역 제한).
+
+    참가자격·입찰참가자격 문구에 시도 이름이 있으면 지역제한으로 보고, 없으면 전국 공고로 봄."""
+    rest = df["restrict_text"].fillna("") + " " + df["qualification"].fillna("")
+    allt = df["name"].fillna("") + " " + df["place"].fillna("") + " " + df["dept"].fillna("") + " " + \
+        df["location"].fillna("") + " " + rest
+    mine = allt.str.contains(region, regex=False)
+    other = rest.str.contains("|".join(x for x in SIDO if x not in region), regex=True)
+    return pd.Series(np.where(mine, "local", np.where(other, "other", "national")), index=df.index)
+
+
+def filter_bids(df: pd.DataFrame, region: str | None = None, keywords=None, local_only: bool = False,
+                include_national: bool = True) -> pd.DataFrame:
+    """공사 + 업종 키워드 (+ 참가 가능 지역: 우리 지역 공고, 그리고 지역 제한 없는 전국 공고)."""
     if df.empty:
         return df
     m = is_construction(df)
     kw = keywords or KEYWORDS
     m &= df["name"].fillna("").str.contains("|".join(map(re.escape, kw)), regex=True)
     if local_only and region:
-        text = df["name"].fillna("") + " " + df["place"].fillna("") + " " + df["dept"].fillna("") + " " + \
-            df["restrict_text"].fillna("") + " " + df["location"].fillna("")
-        m &= text.str.contains(region, regex=False)
-    return df[m]
+        sc = region_scope(df, region)
+        m &= (sc == "local") | ((sc == "national") & include_national)
+    out = df[m]
+    if region and len(out):
+        out = out.assign(지역=region_scope(out, region).map({"local": region, "national": "전국", "other": "타지역"}))
+    return out
 
 
 def is_local(row, region: str) -> bool:

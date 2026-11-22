@@ -150,6 +150,13 @@ def test_kepco_mapping_and_stats(df):
            "filenlink1": "http://srm.kepco.net/x", "filename1": "공고.pdf"}
     m = kepco.map_row(rec)
     assert m["bid_no"] == "E012512345" and m["base_amt"] == 1234000 and m["end_dt"] == "2026-12-01 11:00:00"
+    t = pd.DataFrame([{"name": "배전공사 현장 안전감시 위탁용역", "item_type": None, "purchase_type": "ConstructionService"},
+                      {"name": "울산 배전 전기공사", "item_type": "Construction", "purchase_type": "ConstructionService"}])
+    assert kepco.is_construction(t).tolist() == [False, True]
+    r = pd.DataFrame([{"name": "울산 배전공사", "place": "", "dept": "", "location": "", "restrict_text": "", "qualification": ""},
+                      {"name": "배전공사", "place": "", "dept": "", "location": "", "restrict_text": "전기공사업 등록업체", "qualification": ""},
+                      {"name": "배전공사", "place": "", "dept": "", "location": "", "restrict_text": "경기도 소재 업체", "qualification": ""}])
+    assert kepco.region_scope(r, "울산").tolist() == ["local", "national", "other"]
     kb = kepco.load()
     assert len(kb) >= 150 and kb["sajung"].between(95, 105).mean() > 0.9
     loc = kepco.filter_bids(kb, region="울산", local_only=True)
