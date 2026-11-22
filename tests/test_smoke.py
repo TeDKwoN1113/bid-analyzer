@@ -123,6 +123,24 @@ def test_sticky_pick_and_history(df):
     assert analysis.history_line(h, "X") is None
 
 
+def test_pick_scorecard(df):
+    done = df[df["sajung"].notna() & df["winner_sajung"].notna()].head(3)
+    rows = []
+    for (_, r), s_ in zip(done.iterrows(), [r_ - 1 for r_ in done["sajung"]]):
+        rows.append({"bid_key": r["bid_key"], "day": (r["open_date"] - pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                     "sajung": s_, "amount": 1.0, "prob": 1.0, "at": "x"})
+    r0 = done.iloc[0]
+    rows[0]["sajung"] = float((r0["sajung"] + r0["winner_sajung"]) / 2)   # 낙찰 구간 안 → 낙찰
+    db.upsert_many("pick_log", rows)
+    sc = analysis.pick_scorecard(df)
+    res = dict(zip(sc["bid_key"], sc["결과"]))
+    assert res[r0["bid_key"]] == "🏆 낙찰"
+    assert res[done.iloc[1]["bid_key"]] == "하한 미달"
+    assert "낙찰" in analysis.scorecard_summary(sc)
+    text, keys = notify.build(df)
+    assert isinstance(text, str)
+
+
 def test_backtest_and_tune_rules(df):
     s, d = analysis.backtest(df, ["전기"], test_days=120, max_tests=20)
     assert not s.empty and set(s["방식"]) <= set(analysis.STRATEGIES.values())

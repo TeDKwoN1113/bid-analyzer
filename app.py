@@ -696,6 +696,26 @@ elif page == "🔬 추천 검증":
         "지난 공고 하나하나에 대해 **그 공고 이전 데이터만으로** 사정율을 골랐다면 실제로 어땠는지 시험합니다. "
         "미래 데이터를 쓰지 않으므로, 실제로 이 방식대로 넣었을 때의 성적과 같습니다.")
     need_data()
+    st.subheader("📈 실제 추천 성적표")
+    st.caption("매일 개찰 전에 기록한 추천 금액대로 넣었다면 어땠는지. 개찰 후에 다시 계산한 값이 아니라 "
+               "그때 보여드린 금액 그대로 채점합니다.")
+    sc = analysis.pick_scorecard(raw)
+    sc = sc[sc["결과"] != "결과 대기"] if not sc.empty else sc
+    if sc.empty:
+        st.info("아직 채점할 공고가 없습니다. 추천을 기록한 공고가 개찰되면 여기에 쌓입니다.")
+    else:
+        st.markdown("**" + analysis.scorecard_summary(sc) + "**")
+        show = sc.assign(개찰=sc["open_date"].dt.strftime("%m/%d"),
+                         순위=sc["가상 순위"].map(lambda x: "" if pd.isna(x) else ("상위권 밖" if x == float("inf") else f"{int(x)}위")))
+        st.dataframe(show[["개찰", "name", "org", "sajung_pick", "amount", "sajung", "winner_sajung", "결과", "순위"]]
+                     .rename(columns={"name": "공고명", "org": "발주처", "sajung_pick": "추천 사정율", "amount": "추천 금액",
+                                      "sajung": "실제 사정율", "winner_sajung": "낙찰자 사정율"}),
+                     hide_index=True, use_container_width=True,
+                     column_config={"추천 금액": st.column_config.NumberColumn(format="%,.0f"),
+                                    "추천 사정율": st.column_config.NumberColumn(format="%.2f"),
+                                    "실제 사정율": st.column_config.NumberColumn(format="%.3f"),
+                                    "낙찰자 사정율": st.column_config.NumberColumn(format="%.3f")})
+    st.markdown("---")
     import json as _json
     cur = analysis.current_strategy()
     st.info(f"현재 투찰금액 계산 방식: **{analysis.STRATEGIES[cur]}**  \n"

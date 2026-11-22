@@ -239,6 +239,23 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
         _more(lines, len(res))
         parts.append("\n".join(lines))
 
+    # 3-1) 추천 성적: 개찰 전에 보낸 추천대로 넣었다면?
+    sc = analysis.pick_scorecard(df)
+    if not sc.empty:
+        sc = sc[sc["bid_key"].isin(t["bid_key"]) & (sc["open_date"] >= now - pd.Timedelta(days=3))
+                & (sc["결과"] != "결과 대기")]
+        sc = sc[~sc["bid_key"].map(lambda k: (k, "score") in done).astype(bool)]
+        if len(sc):
+            lines = [f"📈 <b>추천 성적</b> — 추천대로 넣었다면 {_e(analysis.scorecard_summary(sc))}"]
+            for _, r in sc.head(DETAIL_MAX).iterrows():
+                vr = r["가상 순위"]
+                rank = "" if pd.isna(vr) else (" · 상위권 밖" if vr == float("inf") else f" · 가상 {int(vr)}위")
+                lines.append(f"• {_e(r['name'])}\n  추천 {r['sajung_pick']:.2f}% → 실제 {r['sajung']:.2f}% / "
+                             f"낙찰자 {r['winner_sajung']:.2f}% → <b>{_e(r['결과'])}</b>{rank}")
+            keys += [(k, "score") for k in sc["bid_key"]]
+            _more(lines, len(sc))
+            parts.append("\n".join(lines))
+
     # 4) 우리 투찰 결과
     mb = analysis.my_bids_view(df)
     if not mb.empty:
@@ -270,6 +287,14 @@ def weekly_report(df: pd.DataFrame | None = None, days: int = 7) -> str:
     opened = t[(t["open_date"] >= since) & (t["open_date"] < now)]
     mb = analysis.my_bids_view(df)
     lines = [f"📈 <b>주간 성적 ({since:%m/%d}~{now:%m/%d})</b>"]
+    sc = analysis.pick_scorecard(df)
+    if not sc.empty:
+        sc = sc[sc["bid_key"].isin(t["bid_key"]) & (sc["결과"] != "결과 대기")]
+        wk_sc = sc[sc["open_date"] >= since]
+        if len(wk_sc):
+            lines.append("추천대로 넣었다면 (이번 주): " + analysis.scorecard_summary(wk_sc))
+        if len(sc) > len(wk_sc):
+            lines.append("추천대로 넣었다면 (누적): " + analysis.scorecard_summary(sc))
     if mb.empty:
         lines.append(f"참가 가능 공고 {len(opened)}건 개찰 · 우리 투찰 기록 0건")
         lines.append("※ 투찰하신 공고는 사이트에서 '📝 투찰 기록'을 눌러 두면 결과가 자동으로 집계됩니다.")

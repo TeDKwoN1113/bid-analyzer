@@ -718,6 +718,51 @@ def history_line(hist: dict, bid_key: str) -> str | None:
     return " → ".join(out) if len(out) > 1 else None
 
 
+def pick_scorecard(df: pd.DataFrame) -> pd.DataFrame:
+    """개찰 전에 기록해 둔 추천(pick_log)대로 넣었다면 결과가 어땠는지 (미래 정보 없이 공정한 성적)."""
+    pl = db.query_df("SELECT bid_key, day, sajung, amount FROM pick_log")
+    if pl.empty or df.empty:
+        return pd.DataFrame()
+    cols = ["bid_key", "bid_no", "name", "org", "open_date", "sajung", "winner_sajung", "participants",
+            "base_amt", "lower_rate", "a_value", "allowed_regions", "region", "demand_org"]
+    d = df[[c for c in cols if c in df]]
+    v = pl.merge(d, on="bid_key", how="inner", suffixes=("_pick", ""))
+    v = v[v["open_date"].notna() & (v["day"] <= v["open_date"].dt.strftime("%Y-%m-%d"))]
+    v = v.sort_values("day").groupby("bid_key").tail(1)          # 개찰 전 마지막 추천
+    v = v[v["sajung"].notna() & (v["open_date"] < pd.Timestamp.now())]
+    if v.empty:
+        return pd.DataFrame()
+    s_, a, b = v["sajung_pick"], v["sajung"], v["winner_sajung"]
+    v["결과"] = np.where(s_ < a, "하한 미달",
+                       np.where(b.notna() & (s_ < b), "🏆 낙찰", np.where(b.notna(), "낙찰자보다 높음", "결과 대기")))
+    rk = db.query_df("SELECT bid_key, amount FROM ranks WHERE rank > 0 AND amount IS NOT NULL")
+    amounts = {k: np.sort(g["amount"].values) for k, g in rk.groupby("bid_key")} if len(rk) else {}
+
+    def vrank(r):
+        comp = amounts.get(r["bid_key"])
+        if comp is None or not len(comp) or r["결과"] == "하한 미달":
+            return np.nan
+        n = 1 + int((comp < r["amount"]).sum())
+        return n if n <= len(comp) else np.inf
+    v["가상 순위"] = v.apply(vrank, axis=1)
+    return v.sort_values("open_date", ascending=False).reset_index(drop=True)
+
+
+def scorecard_summary(sc: pd.DataFrame) -> str:
+    """'추천대로 넣었다면 N건 중 🏆 a · 하한 미달 b · 높음 c · 10위 이내 d' 한 줄."""
+    if sc is None or sc.empty:
+        return ""
+    r = sc["결과"]
+    vr = sc["가상 순위"]
+    top10 = int(((vr > 1) & (vr <= 10)).sum())
+    txt = (f"{len(sc)}건 중 🏆 낙찰 {int((r == '🏆 낙찰').sum())} · 2~10위 {top10} · "
+           f"하한 미달 {int((r == '하한 미달').sum())} · 낙찰자보다 높음 {int((r == '낙찰자보다 높음').sum())}")
+    med = vr[np.isfinite(vr)].median() if vr.notna().any() else np.nan
+    if pd.notna(med):
+        txt += f" (가상 순위 중앙 {med:.0f}위)"
+    return txt
+
+
 def evidence_lines(pk: dict) -> list[str]:
     """근거를 사람이 읽는 문장으로 (화면·알림 공용, HTML 없음)."""
     out = []
