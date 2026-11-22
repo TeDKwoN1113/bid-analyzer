@@ -17,6 +17,7 @@ _BASE_SQL = """
                ba.a_apply, ba.pure_cost, ba.a_detail,
                p.plan_price, p.base_amt AS base_amt_open,
                o.participants AS participants_open, o.status, o.first_company, o.first_amt, o.first_bizno,
+               o.first_rate,
                r.participants AS participants_final, r.winner, r.win_amt, r.win_rate, r.winner_bizno
         FROM bids b
         LEFT JOIN base_amounts ba ON ba.bid_key = b.bid_key
@@ -125,6 +126,18 @@ def _build_dataset() -> pd.DataFrame:
         df[out + "_known"] = df["notice_dt"].astype(str).str[:10].isin(days) | (df[out] != "") | \
             df["bid_no"].isin(checked)
     df["base_amt"] = df["base_amt_open"].fillna(df["base_amt_notice"])
+    # 예정가격: 예비가격 상세(정확) → 없으면 낙찰률·1순위 투찰률로 역산 (금액 ÷ 예정가격 대비 비율, 소수 3자리라 오차 ±0.001%p 미만)
+    df["plan_price"] = pd.to_numeric(df["plan_price"], errors="coerce").astype(float)
+    src = pd.Series(np.where(df["plan_price"].notna(), "예비가격", ""), index=df.index, dtype=object)
+    for amt, rate, label in (("win_amt", "win_rate", "낙찰률 역산"), ("first_amt", "first_rate", "투찰률 역산")):
+        if amt in df and rate in df:
+            r_ = pd.to_numeric(df[rate], errors="coerce")
+            ok = df["plan_price"].isna() & pd.to_numeric(df[amt], errors="coerce").notna() & r_.between(50, 110)
+            if ok.any():
+                df["plan_price"] = df["plan_price"].where(
+                    ~ok, (pd.to_numeric(df[amt], errors="coerce") / (r_ / 100)).round())
+                src = src.where(~ok, label)
+    df["plan_source"] = src
     df["a_value"] = df["a_value"].fillna(0)
     df["participants"] = df["participants_open"].where(df["participants_open"] > 0,
                                                        df["participants_final"])
@@ -1123,6 +1136,13 @@ def calc_check(df: pd.DataFrame) -> list[str]:
                    f"개찰결과 있음 {miss['first_amt'].notna().sum()} · 금액대 "
                    + ", ".join(f"{k} {v}" for k, v in band.value_counts(sort=False).items()))
         out.append("  계약방법: " + ", ".join(f"{k} {v}" for k, v in meth.items()))
+    if "plan_source" in done:
+        vc = done["plan_source"].value_counts()
+        out.append("  예정가격 출처: " + ", ".join(f"{k or '없음'} {v:,}" for k, v in vc.items()))
+        both = done[(done["plan_source"] == "예비가격") & done["win_rate"].between(50, 110) & done["win_amt"].notna()]
+        if len(both):
+            dev = ((both["win_amt"] / (both["win_rate"] / 100)) / both["plan_price"] - 1).abs() * 100
+            out.append(f"  낙찰률 역산 검증 {len(both):,}건: 오차 중앙 {dev.median():.4f}% · 0.01% 넘음 {(dev > 0.01).mean() * 100:.1f}%")
     by_m = done.assign(m=done["open_date"].dt.strftime("%Y-%m")).groupby("m")["sajung"].agg(["size", "median"])
     out.append("  월별 건수·사정율 중앙: " + ", ".join(f"{m} {int(r['size'])}건 {r['median']:.2f}" for m, r in by_m.iterrows()))
     return out

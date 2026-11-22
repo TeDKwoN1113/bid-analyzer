@@ -180,6 +180,17 @@ def test_kepco_mapping_and_stats(df):
     assert rec and 98 < rec["사정율"] < 102
 
 
+def test_plan_price_fallback_from_rate(df):
+    done = df[df["plan_price"].notna() & df["first_rate"].notna()].head(5)
+    before = dict(zip(done["bid_key"], done["sajung"]))
+    for k in before:
+        db.execute("DELETE FROM plans WHERE bid_key = :k", {"k": k})
+    d2 = analysis.load_dataset().set_index("bid_key")
+    for k, sj in before.items():
+        assert d2.at[k, "plan_source"] == "투찰률 역산"
+        assert abs(d2.at[k, "sajung"] - sj) < 0.002     # 소수 3자리 투찰률 → 사정율 오차 아주 작음
+
+
 def test_backtest_and_tune_rules(df):
     s, d = analysis.backtest(df, ["전기"], test_days=120, max_tests=20)
     assert not s.empty and set(s["방식"]) <= set(analysis.STRATEGIES.values())

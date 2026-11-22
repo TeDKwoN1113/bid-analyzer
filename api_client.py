@@ -1,4 +1,5 @@
 """공공데이터포털(조달청) OpenAPI 호출."""
+import json
 import time
 import xml.etree.ElementTree as ET
 
@@ -47,6 +48,13 @@ def _parse(resp: requests.Response) -> tuple[list[dict], int]:
     except ValueError:
         raise ApiError(f"응답을 읽을 수 없음: {text[:300]}")
 
+    if not isinstance(data, dict) or ("response" not in data and "header" not in data and "body" not in data):
+        # 정상 응답 모양이 아니면 '0건'으로 넘어가지 말고 오류로 (호출 한도 초과 등이 이렇게 오기도 함)
+        msg = json.dumps(data, ensure_ascii=False)[:300] if not isinstance(data, str) else data[:300]
+        low = msg.lower()
+        if "limit" in low or "quota" in low or "exceed" in low or "초과" in msg:
+            raise QuotaError(f"호출 한도 초과(추정): {msg}")
+        raise ApiError(f"예상하지 못한 응답: {msg}")
     r = data.get("response", data)
     header = r.get("header", {})
     code = str(header.get("resultCode", "00"))

@@ -223,8 +223,25 @@ def collect_day(op: str, mapper, d: date) -> int:
             batches.setdefault(table, []).append(row)
     for table, rows in batches.items():
         db.upsert_many(table, rows)
-    db.mark_day(op, d.isoformat(), len(items))
+    # 평일인데 0건이면 (호출 한도·일시 장애 가능성) '완료'로 표시하지 않고 다음에 다시 받음
+    if items or d.weekday() >= 5 or op not in MUST_HAVE_DATA:
+        db.mark_day(op, d.isoformat(), len(items))
     return len(items)
+
+
+# 평일이면 반드시 자료가 있어야 하는 항목
+MUST_HAVE_DATA = {"bid_list", "base_amount", "openings", "prelim_prices", "winners"}
+
+
+def repair_empty_days() -> int:
+    """예전에 평일 0건으로 '완료' 표시된 날을 지워서 다시 받게 함."""
+    cd = db.query_df("SELECT op, day FROM collect_days WHERE rows = 0")
+    if cd.empty:
+        return 0
+    cd = cd[cd["op"].isin(MUST_HAVE_DATA) & (pd.to_datetime(cd["day"], errors="coerce").dt.weekday < 5)]
+    for r in cd.itertuples():
+        db.execute("DELETE FROM collect_days WHERE op = :o AND day = :d", {"o": r.op, "d": r.day})
+    return len(cd)
 
 
 def collect_days(op: str, days: list[date], progress=None, step0=0, total=1) -> dict:
@@ -283,6 +300,9 @@ def auto(progress=print) -> dict:
     oldest = today - timedelta(days=s["backfill_days"])
     summary = {}
     _cleanup(progress)  # 채우기 전에 먼저 공간 확보 (무료 한도 500MB)
+    fixed = repair_empty_days()
+    if fixed and progress:
+        progress(f"0건으로 끝났던 평일 {fixed}일을 다시 받기로 표시")
     for op, _, label in JOBS:
         done = db.done_days(op)
         missing = []
