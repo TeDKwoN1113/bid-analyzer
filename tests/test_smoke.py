@@ -3,6 +3,7 @@
 샘플(가상) 데이터로 계산·알림·화면이 오류 없이 동작하는지 확인합니다.
 """
 import json
+from datetime import date, timedelta
 import os
 import sys
 
@@ -189,6 +190,49 @@ def test_plan_price_fallback_from_rate(df):
     for k, sj in before.items():
         assert d2.at[k, "plan_source"] == "투찰률 역산"
         assert abs(d2.at[k, "sajung"] - sj) < 0.002     # 소수 3자리 투찰률 → 사정율 오차 아주 작음
+
+
+def test_d2b_mapping_and_flow(df, monkeypatch):
+    import d2b
+    xml = ("<response><header><resultCode>00</resultCode></header><body><items><item><pblancNo>2026-18396</pblancNo>"
+           "<cntrwkNm>울산 부대 전기공사</cntrwkNm></item></items><totalCount>1</totalCount></body></response>")
+    items, total = d2b._items_from_xml(xml)
+    assert total == 1 and items[0]["cntrwkNm"] == "울산 부대 전기공사"
+    soon = (pd.Timestamp.now() + pd.Timedelta(days=3)).strftime("%Y%m%d%H%M")
+    lst = {"pblancYear": "2026", "pblancSeCode": "1", "pblancNo": "2026-18396", "pblancOdr": "0", "cntrwkNo": "C1",
+           "orntCode": "9001", "cntrwkNm": "울산 OO부대 전기공사", "ornt": "국군재정관리단", "busiDivs": "공사",
+           "pblancDate": "20261120", "opengDt": soon, "biddocPresentnClosDt": soon, "baseAmnt": "300,000,000",
+           "g2bPblancNo": ""}
+    det = {"areaLmttList": "울산광역시", "lcnsLmttList": "전기공사업", "scsbidLwltRt": "87.745", "estmPrce": "272727272",
+           "inanAmnt": "1000000", "inheAmnt": "800000", "safeAmnt": "2000000", "cntrwkSe": "전기"}
+    calls = []
+
+    def fake_call(base, op, params, page=1, rows=100):
+        calls.append(op)
+        if op == "getFcltyCmpetBidPblancList":
+            return [lst], 1
+        if op == "getFcltyCmpetBidPblancDetail":
+            return [det], 1
+        return [], 0
+    monkeypatch.setattr(d2b, "call", fake_call)
+    n, saved = d2b.collect_notices(date.today() - timedelta(days=5), date.today())
+    assert saved == 1
+    d = analysis.load_dataset().set_index("bid_key")
+    k = "D2B9001_202618396-000"
+    assert k in d.index and d.at[k, "allowed_regions"] == "울산광역시" and d.at[k, "a_value"] == 3800000
+    assert analysis.eligible(d.loc[[k]]).iloc[0]
+    pk = analysis.pick_bid(df, d.loc[k], analysis.bid_keywords(d.loc[k]))
+    assert pk and pk["투찰금액"] > 0
+    # 결과: 선택된 복수예비가격 평균 = 예정가격, 1순위·낙찰자
+    pre = [{"epprRank": str(i), "planPrce": str(300_000_000 + i * 100_000), "choiYsno": "Y" if i in (1, 2, 3, 4) else "N"}
+           for i in range(1, 16)]
+    bidders = [{"bidnRank": "1", "tbidAmnt": "265000000", "bznsRgnb": "111-11-11111", "mfkrName": "가", "bidnRate": "88.1"},
+               {"bidnRank": "2", "tbidAmnt": "266000000", "bznsRgnb": "222-22-22222", "mfkrName": "나", "bidnRate": "88.4"}]
+    tb = d2b.map_result({**lst, "opengDate": "20261123"}, {"bsisPreparPc": "300000000", "scsbidEntrpsBsnmRegistNo": "1111111111",
+                        "scsbidEntrpsNm": "가"}, pre, bidders)
+    assert tb["plans"][0]["plan_price"] == 300_250_000
+    assert tb["openings"][0]["first_amt"] == 265000000 and tb["results"][0]["win_amt"] == 265000000
+    assert len(tb["ranks"]) == 2
 
 
 def test_backtest_and_tune_rules(df):

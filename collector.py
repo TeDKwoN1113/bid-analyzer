@@ -299,6 +299,7 @@ def auto(progress=print) -> dict:
     recent = [today - timedelta(days=i) for i in range(2, -1, -1)]
     oldest = today - timedelta(days=s["backfill_days"])
     summary = {}
+    backfilled = False
     _cleanup(progress)  # 채우기 전에 먼저 공간 확보 (무료 한도 500MB)
     fixed = repair_empty_days()
     if fixed and progress:
@@ -313,6 +314,8 @@ def auto(progress=print) -> dict:
             d -= timedelta(days=1)
         days = recent + missing
         res = collect_days(op, days)
+        if missing and res["count"]:
+            backfilled = True
         msg = f"최근 3일 + 과거 {len(missing)}일"
         if res["stopped"]:
             msg += " / " + res["stopped"]
@@ -322,6 +325,15 @@ def auto(progress=print) -> dict:
         summary[label] = res
         if progress:
             progress(f"{label}: {res['count']:,}건, {msg}")
+    try:
+        import d2b
+        summary["국방"] = d2b.auto(progress)
+        backfilled = backfilled or "과거 결과" in summary["국방"]
+        if progress:
+            progress(summary["국방"])
+    except Exception as e:  # noqa: BLE001  국방 문제로 나라장터 수집이 멈추지 않게
+        if progress:
+            progress(f"국방 수집 실패: {e}")
     try:
         import kepco
         summary["한전"] = kepco.auto(progress)
@@ -335,6 +347,9 @@ def auto(progress=print) -> dict:
     except Exception as e:  # noqa: BLE001
         if progress:
             progress(f"지역·면허 재확인 실패: {e}")
+    if backfilled:
+        # 과거 자료를 새로 채웠으면 분석 표 캐시를 한 번 전체 다시 받게 표시
+        db.set_kv("dataset_full_reload_after", pd.Timestamp.now().isoformat())
     r = collect_ranks_auto()
     summary["개찰순위"] = r
     summary["우리 투찰"] = update_my_bids(progress)
@@ -445,6 +460,14 @@ def quick(progress=print) -> dict:
     except Exception as e:  # noqa: BLE001
         if progress:
             progress(f"지역·면허 재확인 실패: {e}")
+    try:
+        import d2b
+        summary["국방"] = d2b.auto(progress, quick=True)
+        if progress:
+            progress(summary["국방"])
+    except Exception as e:  # noqa: BLE001
+        if progress:
+            progress(f"국방 수집 실패: {e}")
     summary["우리 투찰"] = update_my_bids(progress)
     db.log("빠른 수집", f"{days[0]}~{today}", sum(v["count"] for v in summary.values() if isinstance(v, dict)),
            "; ".join(v["stopped"] for v in summary.values() if isinstance(v, dict) and v["stopped"]))

@@ -51,8 +51,10 @@ def _raw_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         try:
             with open(path, "rb") as f:
                 cache = pickle.load(f)
-            if (now - cache["full_at"]).days >= CACHE_FULL_DAYS or cache.get("sql") != _BASE_SQL:
-                cache = None   # 오래됐거나 받아오는 항목이 바뀌었으면 전체 다시
+            mark = db.get_kv("dataset_full_reload_after")
+            if (now - cache["full_at"]).days >= CACHE_FULL_DAYS or cache.get("sql") != _BASE_SQL or \
+                    (mark and pd.Timestamp(mark) > cache["full_at"]):
+                cache = None   # 오래됐거나, 항목이 바뀌었거나, 과거 자료를 새로 채웠으면 전체 다시
         except Exception:  # noqa: BLE001  손상된 파일은 무시하고 전체 다시 받기
             cache = None
     if cache is None:

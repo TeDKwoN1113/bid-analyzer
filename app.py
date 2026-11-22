@@ -1224,6 +1224,30 @@ elif page == "⚙️ 설정 · API 점검":
     st.markdown("---")
     st.header("🔌 API 점검")
     st.caption("API가 정상 응답하는지, 어떤 항목(필드)이 오는지 확인합니다. 문제가 생기면 이 화면 결과를 캡처해 주세요.")
+    with st.expander("🪖 국방전자조달(방위사업청) API 점검"):
+        st.caption("공공데이터포털에서 '방위사업청_군수품조달정보 입찰공고_GW'와 '…입찰결과_GW'를 활용신청해야 합니다. "
+                   "(나라장터와 같은 인증키 사용)")
+        if st.button("국방 공고·결과 최근 7일 1건씩 보기"):
+            import d2b
+            for base_, op_, p_ in ((d2b.BID, "getFcltyCmpetBidPblancList",
+                                    {"anmtDateBegin": d2b._d(date.today() - timedelta(days=7)), "anmtDateEnd": d2b._d(date.today())}),
+                                   (d2b.RES, "getFcltyCmpetBidResultList",
+                                    {"opengDateBegin": d2b._d(date.today() - timedelta(days=7)), "opengDateEnd": d2b._d(date.today())})):
+                try:
+                    items_, total_ = d2b.call(base_, op_, p_, rows=3)
+                    st.success(f"{op_}: 전체 {total_:,}건")
+                    if items_:
+                        st.json(items_[0])
+                except Exception as e:  # noqa: BLE001
+                    st.error(f"{op_}: {e}")
+        if st.button("국방 최근 30일 지금 수집"):
+            import d2b
+            with st.spinner("수집 중…"):
+                try:
+                    st.success(d2b.auto(st.write, quick=False))
+                    st.cache_data.clear()
+                except Exception as e:  # noqa: BLE001
+                    st.error(str(e))
     op = st.selectbox("API 종류", list(OPERATIONS.keys()),
                       format_func=lambda k: {"bid_list": "입찰공고", "regions": "참가가능지역", "licenses": "면허제한",
                                              "base_amount": "기초금액", "openings": "개찰결과",
