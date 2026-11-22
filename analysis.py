@@ -94,6 +94,7 @@ def eligible(df: pd.DataFrame, company_region: str | None = None,
     - 지역: 참가가능지역이 없으면(전국) 가능, 있으면 우리 지역이 포함돼야 가능.
       아직 지역 정보를 못 받은 공고는 공사지역·기관명에 우리 지역이 있으면 가능으로 봄.
     - 면허: 면허제한이 확인되고 값이 있으면 우리 면허가 포함돼야 가능.
+    - 수의시담(지정 업체와 협상)은 제외.
     """
     c = db.company()
     reg = company_region if company_region is not None else c["region"]
@@ -108,6 +109,9 @@ def eligible(df: pd.DataFrame, company_region: str | None = None,
     if lic and "licenses" in df:
         has = df["licenses"] != ""
         ok &= ~has | df["licenses"].str.contains("|".join(map(re.escape, lic)), regex=True)
+    if "method" in df:
+        # 수의시담: 발주기관이 정한 업체와 협상하는 수의계약 → 우리가 자유롭게 참가할 수 없음
+        ok &= ~df["method"].fillna("").str.contains("수의시담", regex=False)
     return ok
 
 

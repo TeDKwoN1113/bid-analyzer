@@ -4,7 +4,7 @@
 - 없으면 내 컴퓨터의 SQLite 파일(data/bids.db)을 사용
 """
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -275,6 +275,9 @@ def table_sizes() -> pd.DataFrame:
            FROM pg_catalog.pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC""")
 
 
+PRELIM_KEEP_DAYS = 120  # 예비가격 15개 상세는 최근 120일 개찰분만 보관
+
+
 def _nontarget_sql(keywords: list[str]) -> tuple[str, dict]:
     """우리 업종이 아닌 공고(공고명·공종·면허제한 어디에도 키워드 없음, 우리 투찰 기록 없음)의 bid_key 조회 SQL."""
     params, conds = {}, []
@@ -285,7 +288,9 @@ def _nontarget_sql(keywords: list[str]) -> tuple[str, dict]:
     sql = f"""SELECT b.bid_key FROM bids b
                 WHERE NOT ({' OR '.join(conds)})
                   AND NOT EXISTS (SELECT 1 FROM licenses l WHERE l.bid_key = b.bid_key AND ({lic_conds}))
-                  AND NOT EXISTS (SELECT 1 FROM my_bids m WHERE m.bid_key = b.bid_key)"""
+                  AND NOT EXISTS (SELECT 1 FROM my_bids m WHERE m.bid_key = b.bid_key)
+                  AND EXISTS (SELECT 1 FROM collect_days d
+                              WHERE d.op = 'licenses' AND d.day = SUBSTR(b.notice_dt, 1, 10))"""
     return sql, params
 
 
@@ -294,23 +299,35 @@ def prune_prelim(keywords: list[str]) -> int:
     if not keywords:
         return 0
     sub, params = _nontarget_sql(keywords)
+    cutoff = (datetime.now() - timedelta(days=PRELIM_KEEP_DAYS)).strftime("%Y-%m-%d")
     with engine().begin() as c:
-        res = c.execute(text(f"DELETE FROM prelim_prices WHERE bid_key IN ({sub})"), params)
-        return res.rowcount or 0
+        n = c.execute(text(f"DELETE FROM prelim_prices WHERE bid_key IN ({sub})"), params).rowcount or 0
+        # 오래된 공고의 15개 상세도 정리 (추첨 번호 통계용, 최근 것만 있으면 충분. 예정가격은 plans 에 남음)
+        n += c.execute(text("""DELETE FROM prelim_prices WHERE bid_key IN (
+                SELECT p.bid_key FROM plans p WHERE p.open_dt < :cut
+                  AND NOT EXISTS (SELECT 1 FROM my_bids m WHERE m.bid_key = p.bid_key))"""),
+                       {"cut": cutoff}).rowcount or 0
+        return n
 
 
 def prune_nontarget(keywords: list[str]) -> int:
-    """우리 업종이 아닌 공고의 참가지역·면허제한 행과 공고문 링크를 정리 (분석에 쓰지 않는 부분).
+    """우리 업종이 아닌 공고를 딸린 자료와 함께 삭제 (분석에 쓰지 않음, 무료 저장 한도 때문).
 
-    면허제한 행은 키워드가 없는 것만 지우므로 '우리 업종 여부' 판단은 그대로 유지됨."""
+    면허 정보를 받은 날짜의 공고만 판단하므로, 면허제한을 아직 못 받은 공고는 지우지 않음."""
     if not keywords:
         return 0
     sub, params = _nontarget_sql(keywords)
     n = 0
     with engine().begin() as c:
-        for t in ("licenses", "regions"):
-            n += c.execute(text(f"DELETE FROM {t} WHERE bid_key IN ({sub})"), params).rowcount or 0
-        c.execute(text(f"UPDATE bids SET spec_docs = NULL WHERE spec_docs IS NOT NULL AND bid_key IN ({sub})"), params)
+        ids = c.execute(text(sub), params).scalars().all()
+        for i in range(0, len(ids), 1000):
+            chunk = ids[i:i + 1000]
+            ph = ",".join(f":b{j}" for j in range(len(chunk)))
+            prm = {f"b{j}": k for j, k in enumerate(chunk)}
+            # 공고와 딸린 자료를 통째로 삭제 (bids 는 마지막: 위 조건이 bids 를 참조)
+            for t in ("licenses", "regions", "base_amounts", "plans", "prelim_prices", "openings",
+                      "results", "ranks", "notified", "pick_log", "bids"):
+                n += c.execute(text(f"DELETE FROM {t} WHERE bid_key IN ({ph})"), prm).rowcount or 0
     return n
 
 

@@ -139,6 +139,8 @@ def test_eligibility_regions():
                       "licenses": ["전기공사업/0036", "", "정보통신공사업/0037"], "region": "", "org": "", "demand_org": ""})
     ok = analysis.eligible(d, "울산", ["전기공사업"])
     assert ok.tolist() == [True, False, False]
+    d2 = d.assign(method=["수의시담-수의시담", "", ""])
+    assert not analysis.eligible(d2, "울산", ["전기공사업"]).iloc[0]
 
 
 PAGES = ["🏠 오늘의 투찰", "📋 공고 현황", "📊 사정율 분석", "🧮 투찰 계산기", "📝 우리 투찰",
