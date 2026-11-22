@@ -92,6 +92,10 @@ TABLES = {
         a_value DOUBLE PRECISION, participants INTEGER, our_amount DOUBLE PRECISION, our_rank INTEGER,
         memo TEXT, created_at TEXT
     """, ["bid_no"]),
+    # 공고번호로 직접 확인한 참가지역·면허제한 (날짜 조회에서 빠진 경우 대비)
+    "limit_checks": ("""
+        bid_no TEXT, op TEXT, n INTEGER, checked_at TEXT
+    """, ["bid_no", "op"]),
     "kv": ("""
         k TEXT, v TEXT
     """, ["k"]),

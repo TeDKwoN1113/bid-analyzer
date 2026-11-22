@@ -60,6 +60,8 @@ DEFAULT_SETTINGS = {
         "ranks": "",          # 개찰순위는 공고번호만으로 조회 (inqryDiv 없음)
         "prelim_prices": "2",
         "base_amount": "2",
+        "regions": "2",
+        "licenses": "2",
     },
     # 한 번에 받는 건수 (999가 안 되면 자동으로 100으로 내려서 재시도)
     "num_of_rows": 999,

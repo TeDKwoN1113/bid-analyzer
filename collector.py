@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta
 
 import api_client
 import db
+import pandas as pd
 from config import load_settings
 
 
@@ -309,6 +310,11 @@ def auto(progress=print) -> dict:
     except Exception as e:  # noqa: BLE001  한전 문제로 나라장터 수집이 멈추지 않게
         if progress:
             progress(f"한전 수집 실패: {e}")
+    try:
+        summary["지역·면허 재확인"] = verify_limits(progress)
+    except Exception as e:  # noqa: BLE001
+        if progress:
+            progress(f"지역·면허 재확인 실패: {e}")
     r = collect_ranks_auto()
     summary["개찰순위"] = r
     summary["우리 투찰"] = update_my_bids(progress)
@@ -358,6 +364,52 @@ def maintenance(progress=None) -> str:
     return msg
 
 
+def verify_limits(progress=None, max_bids: int = 150) -> str:
+    """개찰 전·우리 업종 공고 중 참가지역/면허제한 정보가 없는 공고를 공고번호로 직접 조회.
+
+    날짜로 받은 자료에 빠진 공고(정정공고·등록일 차이 등)를 '제한없음'으로 잘못 보는 것을 막음.
+    한 공고는 한 번만 확인 (limit_checks 에 기록)."""
+    import analysis
+    s = load_settings()
+    df = analysis.load_dataset()
+    if df.empty:
+        return "공고 없음"
+    now = pd.Timestamp.now()
+    t = analysis.apply_filters(df[df["open_date"] >= now], keywords=analysis.company_keywords())
+    checked = db.query_df("SELECT bid_no, op FROM limit_checks")
+    done = set(zip(checked["bid_no"], checked["op"]))
+    n_bid, n_rows, stopped, errs, last_err = 0, 0, "", 0, ""
+    for op, col in (("regions", "allowed_regions"), ("licenses", "licenses")):
+        need = t[(t[col] == "") & ~t["bid_no"].map(lambda b: (b, op) in done).astype(bool)]
+        for bid_no in need["bid_no"].head(max_bids):
+            params = {"inqryDiv": s["inqry_div_bidno"].get(op, "2"), "bidNtceNo": bid_no}
+            try:
+                items = api_client.call_all(op, params)
+            except api_client.QuotaError as e:
+                stopped = str(e)
+                break
+            except api_client.ApiError as e:
+                errs += 1
+                last_err = str(e)[:120]
+                if errs >= 5 and n_bid == 0:   # 공고번호 조회를 지원하지 않는 경우 헛호출 방지
+                    stopped = f"{op} 공고번호 조회 실패: {last_err}"
+                    break
+                continue
+            mapper = map_region if op == "regions" else map_license
+            rows = [row for r in items for _, row in mapper(r) if row.get("bid_key")]
+            db.upsert_many(op, rows)
+            db.upsert_many("limit_checks", [{"bid_no": bid_no, "op": op, "n": len(rows), "checked_at": db.now()}])
+            n_bid += 1
+            n_rows += len(rows)
+        if stopped and "한도" in stopped:
+            break
+    msg = f"공고번호로 지역·면허 재확인 {n_bid}건 (찾은 제한 {n_rows}건) {stopped}"
+    db.log("지역·면허 재확인", "-", n_rows, msg)
+    if progress:
+        progress(msg)
+    return msg
+
+
 def quick(progress=print) -> dict:
     """낮 시간 빠른 수집: 어제·오늘 공고, 기초금액, 개찰결과만."""
     today = date.today()
@@ -368,6 +420,11 @@ def quick(progress=print) -> dict:
         summary[LABEL[op]] = res
         if progress:
             progress(f"{LABEL[op]}: {res['count']:,}건 {res['stopped']}")
+    try:
+        summary["지역·면허 재확인"] = verify_limits(progress)
+    except Exception as e:  # noqa: BLE001
+        if progress:
+            progress(f"지역·면허 재확인 실패: {e}")
     summary["우리 투찰"] = update_my_bids(progress)
     db.log("빠른 수집", f"{days[0]}~{today}", sum(v["count"] for v in summary.values() if isinstance(v, dict)),
            "; ".join(v["stopped"] for v in summary.values() if isinstance(v, dict) and v["stopped"]))

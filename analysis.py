@@ -104,13 +104,26 @@ def _build_dataset() -> pd.DataFrame:
         return df
     df = _latest_order(df)
     # 참가가능지역·면허제한 (공고별로 여러 개 → 쉼표로 묶음)
+    try:
+        chk = db.query_df("SELECT bid_no, op FROM limit_checks")
+    except Exception:  # noqa: BLE001
+        chk = pd.DataFrame(columns=["bid_no", "op"])
     for table, col, t in (("regions", "region", regs), ("licenses", "license", lics)):
-        joined = t.groupby("bid_key")[col].agg(lambda x: ", ".join(sorted(set(x)))) if len(t) else pd.Series(dtype=str)
         out = "allowed_regions" if table == "regions" else "licenses"
-        df[out] = df["bid_key"].map(joined).fillna("")
-        # 그 공고 등록일의 데이터를 받았으면 '확인됨' (빈 값 = 제한 없음)
+        if len(t):
+            # 정정공고로 차수가 바뀌어도 이어지도록 공고번호 기준, 자료가 있는 가장 최신 차수 사용
+            t = t.assign(_no=t["bid_key"].str.rsplit("-", n=1).str[0],
+                         _ord=pd.to_numeric(t["bid_key"].str.rsplit("-", n=1).str[1], errors="coerce").fillna(0))
+            t = t[t["_ord"] == t.groupby("_no")["_ord"].transform("max")]
+            joined = t.groupby("_no")[col].agg(lambda x: ", ".join(sorted(set(x))))
+        else:
+            joined = pd.Series(dtype=str)
+        df[out] = df["bid_no"].map(joined).fillna("")
+        # 그 공고 등록일의 자료를 받았거나 공고번호로 직접 확인했으면 '확인됨' (빈 값 = 제한 없음)
         days = db.done_days(table)
-        df[out + "_known"] = df["notice_dt"].astype(str).str[:10].isin(days) | (df[out] != "")
+        checked = set(chk.loc[chk["op"] == table, "bid_no"])
+        df[out + "_known"] = df["notice_dt"].astype(str).str[:10].isin(days) | (df[out] != "") | \
+            df["bid_no"].isin(checked)
     df["base_amt"] = df["base_amt_open"].fillna(df["base_amt_notice"])
     df["a_value"] = df["a_value"].fillna(0)
     df["participants"] = df["participants_open"].where(df["participants_open"] > 0,
