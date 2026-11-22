@@ -275,20 +275,48 @@ def table_sizes() -> pd.DataFrame:
            FROM pg_catalog.pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC""")
 
 
-def prune_prelim(keywords: list[str]) -> int:
-    """우리 업종이 아닌 공고의 '예비가격 15개 상세'를 삭제 (예정가격은 plans 에 남아 분석에 지장 없음)."""
-    if not keywords:
-        return 0
+def _nontarget_sql(keywords: list[str]) -> tuple[str, dict]:
+    """우리 업종이 아닌 공고(공고명·공종·면허제한 어디에도 키워드 없음, 우리 투찰 기록 없음)의 bid_key 조회 SQL."""
     params, conds = {}, []
     for i, k in enumerate(keywords):
         params[f"k{i}"] = f"%{k}%"
         conds.append(f"b.name LIKE :k{i} OR b.main_type LIKE :k{i}")
     lic_conds = " OR ".join(f"l.license LIKE :k{i}" for i in range(len(keywords)))
-    sql = f"""DELETE FROM prelim_prices WHERE bid_key IN (
-                SELECT b.bid_key FROM bids b
+    sql = f"""SELECT b.bid_key FROM bids b
                 WHERE NOT ({' OR '.join(conds)})
                   AND NOT EXISTS (SELECT 1 FROM licenses l WHERE l.bid_key = b.bid_key AND ({lic_conds}))
-                  AND NOT EXISTS (SELECT 1 FROM my_bids m WHERE m.bid_key = b.bid_key))"""
+                  AND NOT EXISTS (SELECT 1 FROM my_bids m WHERE m.bid_key = b.bid_key)"""
+    return sql, params
+
+
+def prune_prelim(keywords: list[str]) -> int:
+    """우리 업종이 아닌 공고의 '예비가격 15개 상세'를 삭제 (예정가격은 plans 에 남아 분석에 지장 없음)."""
+    if not keywords:
+        return 0
+    sub, params = _nontarget_sql(keywords)
     with engine().begin() as c:
-        res = c.execute(text(sql), params)
+        res = c.execute(text(f"DELETE FROM prelim_prices WHERE bid_key IN ({sub})"), params)
         return res.rowcount or 0
+
+
+def prune_nontarget(keywords: list[str]) -> int:
+    """우리 업종이 아닌 공고의 참가지역·면허제한 행과 공고문 링크를 정리 (분석에 쓰지 않는 부분).
+
+    면허제한 행은 키워드가 없는 것만 지우므로 '우리 업종 여부' 판단은 그대로 유지됨."""
+    if not keywords:
+        return 0
+    sub, params = _nontarget_sql(keywords)
+    n = 0
+    with engine().begin() as c:
+        for t in ("licenses", "regions"):
+            n += c.execute(text(f"DELETE FROM {t} WHERE bid_key IN ({sub})"), params).rowcount or 0
+        c.execute(text(f"UPDATE bids SET spec_docs = NULL WHERE spec_docs IS NOT NULL AND bid_key IN ({sub})"), params)
+    return n
+
+
+def vacuum() -> None:
+    """지운 자리를 새 데이터가 다시 쓰도록 정리 (PostgreSQL)."""
+    if engine().dialect.name != "postgresql":
+        return
+    with engine().connect().execution_options(isolation_level="AUTOCOMMIT") as c:
+        c.execute(text("VACUUM (ANALYZE)"))

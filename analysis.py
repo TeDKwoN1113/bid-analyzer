@@ -977,6 +977,19 @@ def calc_check(df: pd.DataFrame) -> list[str]:
         lw = loc[loc["winner_sajung"].notna()]
         out.append(f"  울산 지역제한 {len(loc):,}건 · 참가 중앙 {loc['participants'].median():.0f}곳 · "
                    f"낙찰 구간 폭 중앙 {(lw['winner_sajung'] - lw['sajung']).clip(lower=0).median():.3f}%p")
+    # 최근 30일 우리 참가 가능 공고 중 사정율이 없는 공고는 어떤 공고인지
+    now = pd.Timestamp.now()
+    rec = apply_filters(df[(df["open_date"] < now) & (df["open_date"] >= now - pd.Timedelta(days=30))],
+                        keywords=company_keywords(), eligible_only=True)
+    miss = rec[rec["sajung"].isna()]
+    if len(miss):
+        amt = miss["base_amt"].fillna(miss["est_price"])
+        band = pd.cut(amt, [0, 2e7, 5e7, 1e8, 3e8, 1e12], labels=["2천만↓", "2천~5천", "5천~1억", "1~3억", "3억↑"])
+        meth = (miss["contract_method"].fillna("") + "/" + miss["method"].fillna("")).value_counts().head(4)
+        out.append(f"  최근30일 사정율 없음 {len(miss)}/{len(rec)}건 · 기초금액 없음 {miss['base_amt'].isna().sum()} · "
+                   f"개찰결과 있음 {miss['first_amt'].notna().sum()} · 금액대 "
+                   + ", ".join(f"{k} {v}" for k, v in band.value_counts(sort=False).items()))
+        out.append("  계약방법: " + ", ".join(f"{k} {v}" for k, v in meth.items()))
     by_m = done.assign(m=done["open_date"].dt.strftime("%Y-%m")).groupby("m")["sajung"].agg(["size", "median"])
     out.append("  월별 건수·사정율 중앙: " + ", ".join(f"{m} {int(r['size'])}건 {r['median']:.2f}" for m, r in by_m.iterrows()))
     return out

@@ -261,6 +261,19 @@ def collect(d1: date, d2: date, jobs=None, progress=None) -> dict:
     return summary
 
 
+def _cleanup(progress=None) -> None:
+    try:
+        import analysis
+        kw = analysis.company_keywords()
+        n = db.prune_prelim(kw) + db.prune_nontarget(kw)
+        db.vacuum()
+        if progress:
+            progress(f"사전 정리 {n:,}행 · DB {db.size_mb() or 0:,.0f}MB")
+    except Exception as e:  # noqa: BLE001
+        if progress:
+            progress(f"사전 정리 실패: {e}")
+
+
 def auto(progress=print) -> dict:
     """매일 자동 수집: 최근 3일은 항상 새로 받고, 아직 안 받은 과거 날짜를 최신순으로 채움."""
     s = load_settings()
@@ -268,6 +281,7 @@ def auto(progress=print) -> dict:
     recent = [today - timedelta(days=i) for i in range(2, -1, -1)]
     oldest = today - timedelta(days=s["backfill_days"])
     summary = {}
+    _cleanup(progress)  # 채우기 전에 먼저 공간 확보 (무료 한도 500MB)
     for op, _, label in JOBS:
         done = db.done_days(op)
         missing = []
@@ -312,9 +326,15 @@ def maintenance(progress=None) -> str:
     """저장 공간 정리·점검. 한도의 80%를 넘으면 알림."""
     import analysis
     s = load_settings()
-    removed = db.prune_prelim(analysis.company_keywords())
+    kw = analysis.company_keywords()
+    removed = db.prune_prelim(kw)
+    other = db.prune_nontarget(kw)
+    try:
+        db.vacuum()
+    except Exception as e:  # noqa: BLE001
+        print("VACUUM 실패:", e)
     mb = db.size_mb()
-    msg = f"예비가격 상세 정리 {removed:,}행" + (f" · DB {mb:,.0f}MB / {s['db_limit_mb']}MB" if mb else "")
+    msg = f"예비가격 상세 정리 {removed:,}행 · 다른 업종 지역·면허 정리 {other:,}행" + (f" · DB {mb:,.0f}MB / {s['db_limit_mb']}MB" if mb else "")
     db.log("저장 공간", "-", removed, msg)
     if mb and mb > s["db_limit_mb"] * 0.8:
         try:
@@ -483,6 +503,10 @@ def print_status() -> None:
         h = analysis.data_health(df)
         if len(h):
             print(h.to_string(index=False))
+        ts = db.table_sizes()
+        if len(ts):
+            print("테이블 용량:", ", ".join(f"{r['테이블']} {r['MB'] if r['MB'] is not None else '-'}MB/{int(r['행 수']):,}행"
+                                          for _, r in ts.head(8).iterrows()))
         print("추천 방식:", analysis.STRATEGIES[analysis.current_strategy()])
         for line in analysis.calc_check(df):
             print(line)
