@@ -581,8 +581,11 @@ def current_strategy() -> str:
     return m if m in STRATEGIES else "blend"
 
 
+STICKY_RATIO = 0.9  # 이전 추천의 확률이 최고의 90% 이상이면 이전 추천 유지 (사소한 데이터 변화에 흔들리지 않게)
+
+
 def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True,
-             mode: str | None = None) -> dict | None:
+             mode: str | None = None, prev: float | None = None) -> dict | None:
     """공고 하나에 대한 최종 투찰금액 1개와 근거.
 
     단계별로 섞어서 낙찰확률 계산: 전국 같은 업종 → (우리 지역 지역제한 공고) → (같은 기관)
@@ -626,6 +629,14 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True,
     if not picks:
         picks = [{"사정율": floor_s or 100.0, "낙찰확률": 0.0, "하한통과확률": 0.0}]
     s_ = round(picks[0]["사정율"], 2)
+    kept = False
+    if prev is not None and pd.notna(prev) and fixed_s is None and abs(prev - s_) >= 0.005:
+        hit = curve.iloc[(curve["사정율"] - prev).abs().argsort()[:1]]
+        p_prev = float(hit["낙찰확률"].iloc[0])
+        if picks[0]["낙찰확률"] > 0 and p_prev >= picks[0]["낙찰확률"] * STICKY_RATIO:
+            s_, kept = round(float(prev), 2), True
+            picks = [{"사정율": s_, "낙찰확률": p_prev, "하한통과확률": float(hit["하한통과확률"].iloc[0])}] + \
+                [x for x in picks if abs(x["사정율"] - s_) >= 0.15][:2]
     if fixed_s is not None:
         s_ = fixed_s
         hit = curve.iloc[(curve["사정율"] - s_).abs().argsort()[:1]]
@@ -659,7 +670,48 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True,
         "단계": steps, "근거상세": steps[-1],
         "순공사원가 하한": floor_amt, "순공사원가 사정율": floor_s,
         "방식": STRATEGIES[mode],
+        "이전 추천 유지": kept,
     }
+
+
+def pick_history() -> dict:
+    """공고별 추천 이력 {bid_key: [(day, 사정율, 금액, 확률), ...]} (오래된 것부터)."""
+    h = db.query_df("SELECT bid_key, day, sajung, amount, prob FROM pick_log ORDER BY bid_key, day")
+    return {k: list(g[["day", "sajung", "amount", "prob"]].itertuples(index=False, name=None))
+            for k, g in h.groupby("bid_key")} if len(h) else {}
+
+
+def prev_pick(hist: dict, bid_key: str):
+    """가장 최근 추천 사정율 (없으면 None)."""
+    h = hist.get(bid_key)
+    return h[-1][1] if h else None
+
+
+def log_picks(df: pd.DataFrame, hist: dict | None = None) -> int:
+    """개찰 전·기초금액 공개 공고의 오늘 추천을 기록 (알림·화면이 같은 금액을 보도록)."""
+    now = pd.Timestamp.now()
+    t = apply_filters(df, keywords=company_keywords(), eligible_only=True)
+    t = t[(t["open_date"] >= now) & t["base_amt"].notna() & t["lower_rate"].notna()]
+    hist = pick_history() if hist is None else hist
+    rows, day, at = [], now.strftime("%Y-%m-%d"), now.strftime("%Y-%m-%d %H:%M:%S")
+    for _, r in t.iterrows():
+        pk = pick_bid(df, r, bid_keywords(r), prev=prev_pick(hist, r["bid_key"]))
+        if pk:
+            rows.append({"bid_key": r["bid_key"], "day": day, "sajung": pk["사정율"],
+                         "amount": float(pk["투찰금액"]), "prob": pk["낙찰확률"], "at": at})
+    db.upsert_many("pick_log", rows)
+    return len(rows)
+
+
+def history_line(hist: dict, bid_key: str) -> str | None:
+    """추천이 바뀐 적 있으면 '11/21 100.54% → 11/22 100.27%' 형태로."""
+    h = hist.get(bid_key) or []
+    out, last = [], None
+    for day, s_, _, _ in h:
+        if last is None or abs(s_ - last) >= 0.005:
+            out.append(f"{day[5:].replace('-', '/')} {s_:.2f}%")
+            last = s_
+    return " → ".join(out) if len(out) > 1 else None
 
 
 def evidence_lines(pk: dict) -> list[str]:
@@ -675,6 +727,8 @@ def evidence_lines(pk: dict) -> list[str]:
         out.append(f"비교 대상: 과거 공고 {e['n']}건 (데이터 부족)")
     if pk.get("무작위 대비"):
         out.append(f"과거 낙찰확률 {pk['낙찰확률']}% = 아무렇게나 넣을 때의 {pk['무작위 대비']:.1f}배")
+    if pk.get("이전 추천 유지"):
+        out.append("이전 추천과 확률 차이가 10% 이내라 이전 추천을 그대로 유지 (사소한 데이터 변화에 흔들리지 않게)")
     if pk.get("방식") and pk["방식"] != STRATEGIES["blend"]:
         out.append(f"추천 방식: {pk['방식']} (자동 검증에서 성적이 가장 좋았던 방식)")
     if pk.get("1순위 낙찰률") is not None:

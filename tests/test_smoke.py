@@ -109,6 +109,20 @@ def test_notify_scope_local(df):
     assert notify.scope() == "local" and len(k_loc) <= len(k_all)
 
 
+def test_sticky_pick_and_history(df):
+    r = upcoming(df).iloc[0]
+    kw = analysis.bid_keywords(r)
+    pk = analysis.pick_bid(df, r, kw)
+    near = round(pk["사정율"] + 0.02, 2)        # 확률이 거의 같은 이전 추천 → 유지
+    assert analysis.pick_bid(df, r, kw, prev=near)["사정율"] == near
+    far = 98.0                                   # 확률이 훨씬 낮은 이전 추천 → 새 추천으로 교체
+    assert analysis.pick_bid(df, r, kw, prev=far)["사정율"] == pk["사정율"]
+    assert analysis.log_picks(df) > 0
+    h = {"K": [("2026-11-21", 100.54, 1, 1), ("2026-11-22", 100.54, 1, 1), ("2026-11-23", 100.27, 1, 1)]}
+    assert analysis.history_line(h, "K") == "11/21 100.54% → 11/23 100.27%"
+    assert analysis.history_line(h, "X") is None
+
+
 def test_backtest_and_tune_rules(df):
     s, d = analysis.backtest(df, ["전기"], test_days=120, max_tests=20)
     assert not s.empty and set(s["방식"]) <= set(analysis.STRATEGIES.values())

@@ -144,6 +144,7 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
     t = analysis.apply_filters(df, keywords=kw, regions=rg, max_amt=mx, eligible_only=True)
     if scope() == "local":
         t = t[analysis.local_mask(t)]
+    phist = analysis.pick_history()
     sent = db.query_df("SELECT bid_key, kind FROM notified")
     done = set(zip(sent["bid_key"], sent["kind"]))
     now = pd.Timestamp.now()
@@ -159,7 +160,7 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
     if len(dl):
         lines = [f"⏰ <b>오늘 투찰 마감 {len(dl)}건</b> (아직 기록 없음)"]
         for _, r in dl.sort_values("close_dt").iterrows():
-            pk = analysis.pick_bid(df, r, analysis.bid_keywords(r))
+            pk = analysis.pick_bid(df, r, analysis.bid_keywords(r), prev=analysis.prev_pick(phist, r["bid_key"]))
             amt = f"💰 <b>{pk['투찰금액']:,}원</b> (사정율 {pk['사정율']:.2f}%)" if pk else "투찰금액 계산 불가"
             ct = pd.to_datetime(r["close_dt"], errors="coerce", format="mixed")
             lines.append(f"• {_title(r)}\n  마감 {ct.strftime('%H:%M') if pd.notna(ct) else '-'} | {amt}")
@@ -205,7 +206,7 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
             av = f" | A값 {_won(r['a_value'])}" if r["a_value"] else ""
             line = (f"• {_title(r)}\n  {_e(r['org'])} | 개찰 {_dt(r['open_dt'])}\n"
                     f"  기초금액 {_won(r['base_amt'])} | 하한율 {lr}{av}")
-            pk = analysis.pick_bid(df, r, analysis.bid_keywords(r))
+            pk = analysis.pick_bid(df, r, analysis.bid_keywords(r), prev=analysis.prev_pick(phist, r["bid_key"]))
             if pk:
                 badge = {"높음": "🟢", "보통": "🟡", "낮음": "🔴"}[pk["신뢰도"]]
                 qok, qmsg = pk.get("적격심사") or (None, "")
@@ -318,6 +319,11 @@ def send_weekly_if_due() -> str:
 
 
 def run(dry_run: bool = False) -> str:
+    if not dry_run:
+        try:  # 오늘 추천을 먼저 기록 → 알림·사이트가 같은 금액을 보고, 추천이 사소하게 흔들리지 않음
+            print(f"추천 기록 {analysis.log_picks(analysis.load_dataset())}건")
+        except Exception as e:  # noqa: BLE001
+            print("추천 기록 실패:", e)
     text, keys = build()
     if not text:
         return "보낼 새 소식 없음"

@@ -74,6 +74,10 @@ TABLES = {
         my_rank INTEGER, checked_at TEXT, created_at TEXT
     """, ["bid_key"]),
     # 회사 정보 등 사이트·자동수집이 함께 쓰는 설정
+    # 공고별 추천 기록 (날마다 마지막 추천) — 추천이 자주 바뀌지 않게, 바뀌면 이력 표시
+    "pick_log": ("""
+        bid_key TEXT, day TEXT, sajung REAL, amount REAL, prob REAL, at TEXT
+    """, ["bid_key", "day"]),
     "kv": ("""
         k TEXT, v TEXT
     """, ["k"]),

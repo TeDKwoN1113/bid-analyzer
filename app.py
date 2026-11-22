@@ -213,9 +213,11 @@ if page == "🏠 오늘의 투찰":
 
     # 기초금액 공개 공고는 미리 투찰금액·낙찰확률 계산 (정렬용)
     picks = {}
+    phist = analysis.pick_history()
     for _, r in todo.head(80).iterrows():
         if pd.notna(r["base_amt_notice"]) and pd.notna(r["lower_rate"]):
-            picks[r["bid_key"]] = analysis.pick_bid(raw, r, analysis.bid_keywords(r, sel_lics or _lics))
+            picks[r["bid_key"]] = analysis.pick_bid(raw, r, analysis.bid_keywords(r, sel_lics or _lics),
+                                                    prev=analysis.prev_pick(phist, r["bid_key"]))
     order = st.radio("정렬", ["마감 임박순", "낙찰확률 높은순"], horizontal=True, label_visibility="collapsed")
     if order == "낙찰확률 높은순":
         todo = todo.assign(_p=todo["bid_key"].map(lambda k: (picks.get(k) or {}).get("낙찰확률") or -1))
@@ -262,7 +264,8 @@ if page == "🏠 오늘의 투찰":
             if pd.isna(r["lower_rate"]):
                 st.warning("하한율 정보가 없어 투찰금액을 계산할 수 없습니다. 공고문을 확인하세요.")
                 continue
-            pk = picks.get(r["bid_key"]) or analysis.pick_bid(raw, r, analysis.bid_keywords(r, sel_lics or _lics))
+            pk = picks.get(r["bid_key"]) or analysis.pick_bid(raw, r, analysis.bid_keywords(r, sel_lics or _lics),
+                                                              prev=analysis.prev_pick(phist, r["bid_key"]))
             if not pk:
                 st.caption("투찰금액을 계산할 수 없습니다.")
                 continue
@@ -275,6 +278,9 @@ if page == "🏠 오늘의 투찰":
                 extra.append(f"예상 참가 약 {pk['예상 참가']:,}곳")
             st.caption(f"사정율 {pk['사정율']:.2f}% · 신뢰도 {badge} {pk['신뢰도']}"
                        + ("".join(" · " + x for x in extra)))
+            hl = analysis.history_line(phist, r["bid_key"])
+            if hl:
+                st.caption(f"🔁 추천 변화: {hl} (데이터가 늘어 확실히 더 나은 지점이 생겼을 때만 바뀜)")
             qok, qmsg = pk.get("적격심사") or (None, "")
             if qok is False:
                 st.warning("⚠️ " + qmsg)
