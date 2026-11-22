@@ -484,6 +484,8 @@ def print_status() -> None:
         if len(h):
             print(h.to_string(index=False))
         print("추천 방식:", analysis.STRATEGIES[analysis.current_strategy()])
+        for line in analysis.calc_check(df):
+            print(line)
     except Exception as e:  # noqa: BLE001
         print("점검 요약 실패:", e)
 

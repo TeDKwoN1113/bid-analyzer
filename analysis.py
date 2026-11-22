@@ -959,6 +959,29 @@ def backtest(df: pd.DataFrame, keywords, test_days: int = 90, max_tests: int = 3
 
 
 
+def calc_check(df: pd.DataFrame) -> list[str]:
+    """계산 점검 (실행 기록용): 사정율·낙찰자 사정율이 상식적인 범위인지."""
+    done = apply_filters(df[df["sajung"].notna()], keywords=company_keywords(), eligible_only=True)
+    if done.empty:
+        return ["계산 점검: 개찰 완료 공고 없음"]
+    w = done[done["winner_sajung"].notna()]
+    gap = (w["winner_sajung"] - w["sajung"])
+    pp = done["participants"].dropna()
+    out = [f"계산 점검(우리 참가 가능·개찰 완료 {len(done):,}건, 기간 {done['open_date'].min():%Y-%m-%d}~)",
+           f"  실제 사정율: 중앙 {done['sajung'].median():.3f}% · 98~102% 밖 {(~done['sajung'].between(98, 102)).mean() * 100:.1f}%",
+           f"  낙찰자 사정율 있음 {len(w) / len(done) * 100:.0f}% · 낙찰자<실제(이상) {(gap < 0).mean() * 100:.1f}% · "
+           f"낙찰 구간 폭 중앙 {gap[gap >= 0].median():.3f}%p · 1%p 넘음 {(gap > 1).mean() * 100:.1f}%",
+           f"  참가업체 중앙 {pp.median():.0f}곳 · 10곳 미만 {(pp < 10).mean() * 100:.0f}%"]
+    loc = local_region_history(done, db.company()["region"] or "울산")
+    if len(loc):
+        lw = loc[loc["winner_sajung"].notna()]
+        out.append(f"  울산 지역제한 {len(loc):,}건 · 참가 중앙 {loc['participants'].median():.0f}곳 · "
+                   f"낙찰 구간 폭 중앙 {(lw['winner_sajung'] - lw['sajung']).clip(lower=0).median():.3f}%p")
+    by_m = done.assign(m=done["open_date"].dt.strftime("%Y-%m")).groupby("m")["sajung"].agg(["size", "median"])
+    out.append("  월별 건수·사정율 중앙: " + ", ".join(f"{m} {int(r['size'])}건 {r['median']:.2f}" for m, r in by_m.iterrows()))
+    return out
+
+
 def data_health(df: pd.DataFrame, days: int = 30) -> pd.DataFrame:
     """최근 N일 개찰 공고 기준 데이터 연결 상태 (문제 진단용)."""
     if df.empty:
