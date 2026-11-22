@@ -408,3 +408,4 @@ if __name__ == "__main__":
         print(send("⚡ 입찰 분석기 테스트", "알림 연결이 정상입니다 ✅") or "채널 설정 없음")
     else:
         print(run(a.dry_run))
+        print(f"알림 단계 DB 내려받은 양(대략): {db.read_mb():,.0f}MB")

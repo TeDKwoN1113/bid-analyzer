@@ -203,9 +203,22 @@ def upsert_many(table: str, rows: list[dict]) -> int:
     return len(rows)
 
 
+READ_BYTES = {"n": 0}  # 이번 실행에서 원격 DB 에서 받은 양(대략) — 무료 전송량 감시용
+
+
 def query_df(sql: str, params: dict | None = None) -> pd.DataFrame:
     with engine().connect() as c:
-        return pd.read_sql_query(text(sql), c, params=params or {})
+        df = pd.read_sql_query(text(sql), c, params=params or {})
+    if is_remote() and len(df):
+        try:
+            READ_BYTES["n"] += int(df.memory_usage(deep=True).sum())
+        except Exception:  # noqa: BLE001
+            pass
+    return df
+
+
+def read_mb() -> float:
+    return READ_BYTES["n"] / 1048576
 
 
 def execute(sql: str, params: dict | None = None) -> None:

@@ -208,7 +208,11 @@ def test_revised_and_cancelled_notices():
 def test_qualification_deadline_reminder(df):
     db.use_sample(True)
     k = upcoming(df).iloc[0]["bid_key"]
-    soon = (pd.Timestamp.now() + pd.Timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S")
+    now = pd.Timestamp.now()
+    if now >= now.normalize() + pd.Timedelta(hours=23, minutes=50):
+        pytest.skip("자정 직전에는 '오늘 마감'을 만들 수 없음")
+    soon = min(now + pd.Timedelta(hours=3), now.normalize() + pd.Timedelta(hours=23, minutes=59)) \
+        .strftime("%Y-%m-%d %H:%M:%S")
     db.execute("UPDATE bids SET qual_dt = :q WHERE bid_key = :k", {"q": soon, "k": k})
     text, keys = notify.build(analysis.load_dataset())
     assert (k, "qual") in keys and "참가신청 마감" in text

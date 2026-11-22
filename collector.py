@@ -518,6 +518,7 @@ def print_status() -> None:
             print("테이블 용량:", ", ".join(f"{r['테이블']} {r['MB'] if r['MB'] is not None else '-'}MB/{int(r['행 수']):,}행"
                                           for _, r in ts.head(8).iterrows()))
         print("추천 방식:", analysis.STRATEGIES[analysis.current_strategy()])
+        print(f"이번 실행 DB 내려받은 양(대략): {db.read_mb():,.0f}MB  (무료 한도 월 5,000MB)")
         for line in analysis.calc_check(df):
             print(line)
     except Exception as e:  # noqa: BLE001
