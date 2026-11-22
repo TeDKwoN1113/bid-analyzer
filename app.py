@@ -199,7 +199,44 @@ if page == "🏠 오늘의 투찰":
                 f"**{(todo['마감기준'] <= now + pd.Timedelta(days=3)).sum()}건** · "
                 f"기초금액 공개 **{todo['base_amt_notice'].notna().sum()}건** · 최근 3일 개찰 **{len(recent)}건**")
 
-    only_base = st.toggle("기초금액 공개된 공고만", value=False)
+    # ── 공고 일정 달력 (참가등록마감·투찰마감·개찰 건수) ──
+    wd = "월화수목금토일"
+    days = [now.normalize() + pd.Timedelta(days=i) for i in range(-3, 13)]
+    qd_all = pd.to_datetime(elig["qual_dt"], errors="coerce", format="mixed").dt.normalize() \
+        if "qual_dt" in elig else pd.Series(pd.NaT, index=elig.index)
+    cal_rows = {"참가등록마감": qd_all.value_counts(),
+                "투찰마감": elig["close_date"].dt.normalize().value_counts(),
+                "개찰": elig["open_date"].dt.normalize().value_counts()}
+    head = "".join(
+        f"<th style='{'background:#ffe3ea;' if d == now.normalize() else ''}"
+        f"{'color:#cf222e;' if d.weekday() == 6 else 'color:#1f6feb;' if d.weekday() == 5 else ''}'>"
+        f"{d:%m/%d}<br>{wd[d.weekday()]}</th>" for d in days)
+    body = ""
+    for name, vc in cal_rows.items():
+        cells = ""
+        for d in days:
+            n = int(vc.get(d, 0))
+            bg = "background:#fff5f7;" if d == now.normalize() else ""
+            cells += f"<td style='{bg}{'color:#cf222e;font-weight:700' if n else 'color:#bbb'}'>{n}</td>"
+        body += f"<tr><th style='text-align:left;white-space:nowrap'>{name}</th>{cells}</tr>"
+    st.markdown(
+        "<div style='overflow-x:auto'><table style='border-collapse:collapse;font-size:0.8rem;text-align:center;"
+        "width:100%'><tr><th></th>" + head + "</tr>" + body + "</table></div>"
+        "<style>div[data-testid='stMarkdownContainer'] table td, div[data-testid='stMarkdownContainer'] table th"
+        "{border:1px solid #e5e7eb;padding:3px 4px;}</style>", unsafe_allow_html=True)
+    future = [d for d in days if d >= now.normalize()]
+    close_vc = todo["마감기준"].dt.normalize().value_counts()
+    opts = ["전체"] + [f"{d:%m/%d}({wd[d.weekday()]}) {int(close_vc.get(d, 0))}건" for d in future
+                     if close_vc.get(d, 0)]
+    pick_day = st.pills("투찰마감일로 보기", opts, default="전체", key="cal_day")
+    if pick_day and pick_day != "전체":
+        md = pick_day.split("(")[0]
+        todo = todo[todo["마감기준"].dt.strftime("%m/%d") == md]
+
+    c_a, c_b = st.columns([2, 1])
+    only_base = c_a.toggle("기초금액 공개된 공고만", value=False)
+    view = c_b.segmented_control("보기", ["카드", "표"], default="카드", key="today_view",
+                                 label_visibility="collapsed") or "카드"
     if only_base:
         todo = todo[todo["base_amt_notice"].notna()]
     if todo.empty:
@@ -225,7 +262,38 @@ if page == "🏠 오늘의 투찰":
         st.caption("기초금액이 공개되어 투찰금액을 계산할 수 있는 공고부터, 과거 낙찰확률이 높은 순서입니다. "
                    "참가업체가 적은 공고일수록 확률이 높습니다.")
 
-    for _, r in todo.head(40).iterrows():
+    if view == "표" and len(todo):
+        def _dt_s(x):
+            x = pd.to_datetime(x, errors="coerce", format="mixed")
+            return "" if pd.isna(x) else x.strftime("%m/%d %H:%M")
+        rows_t = []
+        for _, r in todo.head(80).iterrows():
+            pk = picks.get(r["bid_key"])
+            rows_t.append({
+                "D-day": dday(r["마감기준"]),
+                "공고명": r["name"],
+                "발주처": r["org"],
+                "참가지역": r["allowed_regions"] or ("제한없음" if r["allowed_regions_known"] else "확인중"),
+                "추정가격": won(r["est_price"]) if pd.notna(r["est_price"]) else "",
+                "기초금액": won(r["base_amt"]) if pd.notna(r["base_amt_notice"]) else "미공개",
+                "참가등록마감": _dt_s(r.get("qual_dt")),
+                "투찰마감": _dt_s(r["close_date"]),
+                "개찰": _dt_s(r["open_date"]),
+                "💰 투찰금액": f"{pk['투찰금액']:,}원" if pk else "",
+                "사정율": f"{pk['사정율']:.2f}%" if pk else "",
+                "낙찰확률": f"{pk['낙찰확률']}%" if pk and pk.get("낙찰확률") is not None else "",
+                "기록": "✅" if r["bid_no"] in mine_map else "",
+                "공고": r["url"] if isinstance(r["url"], str) and r["url"].startswith("http") else None,
+            })
+        cols_t = ["D-day", "공고명", "💰 투찰금액", "사정율", "낙찰확률", "기초금액", "투찰마감", "개찰",
+                  "참가등록마감", "발주처", "참가지역", "추정가격", "기록", "공고"]
+        st.dataframe(pd.DataFrame(rows_t)[cols_t], hide_index=True, use_container_width=True,
+                     height=min(38 * (len(rows_t) + 1) + 4, 640),
+                     column_config={"공고": st.column_config.LinkColumn("공고", display_text="열기"),
+                                    "공고명": st.column_config.TextColumn(width="large")})
+        st.caption("투찰금액 근거·경쟁사·투찰 기록은 '카드' 보기에서 확인하세요.")
+
+    for _, r in (todo.head(40) if view == "카드" else todo.head(0)).iterrows():
         with st.container(border=True):
             top = st.columns([5, 1])
             link = f"[{r['name']}]({r['url']})" if isinstance(r["url"], str) and r["url"].startswith("http") else r["name"]
