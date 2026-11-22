@@ -337,3 +337,28 @@ def vacuum() -> None:
         return
     with engine().connect().execution_options(isolation_level="AUTOCOMMIT") as c:
         c.execute(text("VACUUM (ANALYZE)"))
+
+
+def compact(limit_mb: float) -> list[str]:
+    """테이블을 새로 써서 실제 용량을 줄임 (VACUUM FULL). 작은 테이블부터, 한도를 넘지 않을 때만.
+
+    VACUUM FULL 은 잠시 테이블 사본만큼 공간이 더 필요하므로 '현재 용량 + 테이블 크기 < 한도'일 때만 실행."""
+    if engine().dialect.name != "postgresql":
+        return []
+    sizes = query_df("""SELECT relname AS t, pg_total_relation_size(relid) / 1048576.0 AS mb
+                        FROM pg_catalog.pg_stat_user_tables ORDER BY 2""")
+    done = []
+    for t, mb in zip(sizes["t"], sizes["mb"]):
+        if t not in TABLES:
+            continue
+        cur = size_mb() or 0
+        if cur + mb >= limit_mb * 0.97:
+            done.append(f"{t} 건너뜀(여유 부족)")
+            continue
+        try:
+            with engine().connect().execution_options(isolation_level="AUTOCOMMIT") as c:
+                c.execute(text(f"VACUUM (FULL, ANALYZE) {t}"))
+            done.append(t)
+        except Exception as e:  # noqa: BLE001
+            done.append(f"{t} 실패({str(e)[:60]})")
+    return done

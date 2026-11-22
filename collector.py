@@ -331,6 +331,7 @@ def maintenance(progress=None) -> str:
     other = db.prune_nontarget(kw)
     try:
         db.vacuum()
+        print("압축:", ", ".join(db.compact(s["db_limit_mb"])))
     except Exception as e:  # noqa: BLE001
         print("VACUUM 실패:", e)
     mb = db.size_mb()
