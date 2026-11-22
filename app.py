@@ -929,7 +929,7 @@ elif page == "⚙️ 설정 · API 점검":
         q1, q2, q3 = st.columns(3)
         perf = q1.number_input("최근 5년 동일업종 실적 합계(억원)", 0.0, 100000.0, _f("qual_perf"), 0.1)
         mult = q2.number_input("시공경험 만점 배수 (기준표, 예: 1배)", 0.1, 10.0, _f("qual_mult", 1.0), 0.1)
-        mgmt = q3.number_input("경영상태 만점 가능한 최대 추정가격(억원, 모르면 0)", 0.0, 100000.0, _f("qual_mgmt"), 0.5)
+        mgmt = q3.number_input("경영상태 한도(억원) — 유동비율·부채비율 만점이면 0", 0.0, 100000.0, _f("qual_mgmt"), 0.5)
         single = st.checkbox("단일공종 공사라 시공경험 만점 처리되는 구간 (실적 계산 생략)",
                              value=db.get_kv("qual_single", "0") == "1")
         limits = []
