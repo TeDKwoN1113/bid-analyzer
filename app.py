@@ -759,16 +759,12 @@ elif page == "⬇️ 데이터 수집":
                 n2 = db.prune_nontarget(kw)
                 try:
                     db.vacuum()
-                    res = db.compact(lim)
-                    skipped = [x for x in res if "건너뜀" in x or "실패" in x]
-                    if skipped:
-                        st.caption("일부 테이블은 여유 공간이 부족해 압축을 건너뜀 (내일 자동 정리 후 다시 누르면 됨): "
-                                   + ", ".join(skipped))
                 except Exception as e:  # noqa: BLE001
-                    st.caption(f"압축 생략: {e}")
+                    st.caption(f"VACUUM 생략: {e}")
                 st.cache_data.clear()
             after = db.size_mb() or 0
             st.success(f"정리 완료: 예비가격 상세 {n1:,}행 · 다른 업종 공고 자료 {n2:,}행 삭제 → 현재 {after:,.0f}MB")
+            st.caption("큰 테이블 압축(실제 용량 줄이기)은 사이트가 멈추지 않도록 매일 새벽 자동 수집 때 합니다.")
         with st.expander("테이블별 용량"):
             st.dataframe(db.table_sizes(), hide_index=True, use_container_width=True)
             st.caption("자동 수집이 매일 정리합니다: 우리 업종이 아닌 공고(딸린 자료 포함), 120일 지난 예비가격 15개 상세. "
