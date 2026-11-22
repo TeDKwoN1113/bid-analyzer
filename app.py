@@ -752,13 +752,23 @@ elif page == "⬇️ 데이터 수집":
     if mb is not None:
         lim = settings["db_limit_mb"]
         st.progress(min(mb / lim, 1.0), text=f"저장 공간: {mb:,.0f}MB / {lim}MB ({mb / lim * 100:.0f}%)")
-        with st.expander("테이블별 용량 · 정리"):
+        if st.button("🧹 저장 공간 지금 정리하기", type="primary" if mb > lim * 0.8 else "secondary"):
+            with st.spinner("정리 중… (1~3분 걸릴 수 있어요)"):
+                kw = analysis.company_keywords()
+                n1 = db.prune_prelim(kw)
+                n2 = db.prune_nontarget(kw)
+                try:
+                    db.vacuum()
+                except Exception as e:  # noqa: BLE001
+                    st.caption(f"VACUUM 생략: {e}")
+                st.cache_data.clear()
+            after = db.size_mb() or 0
+            st.success(f"정리 완료: 예비가격 상세 {n1:,}행 · 다른 업종 공고 자료 {n2:,}행 삭제 → 현재 {after:,.0f}MB")
+            st.caption("지운 자리는 새 데이터가 다시 씁니다. 용량 숫자가 바로 크게 줄지 않아도 한도에는 여유가 생깁니다.")
+        with st.expander("테이블별 용량"):
             st.dataframe(db.table_sizes(), hide_index=True, use_container_width=True)
-            st.caption("자동 수집이 매일 우리 업종이 아닌 공고의 '예비가격 15개 상세'를 정리합니다. "
+            st.caption("자동 수집이 매일 정리합니다: 우리 업종이 아닌 공고(딸린 자료 포함), 120일 지난 예비가격 15개 상세. "
                        "(예정가격·사정율은 남아서 분석에 지장 없음)")
-            if st.button("지금 정리하기"):
-                n = db.prune_prelim(analysis.company_keywords())
-                st.success(f"{n:,}행 정리했습니다.")
     st.subheader("🩺 데이터 점검 (최근 30일 개찰 공고)")
     hd = analysis.data_health(analysis.load_dataset())
     if hd.empty:
