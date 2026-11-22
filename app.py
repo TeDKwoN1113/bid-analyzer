@@ -79,6 +79,26 @@ if use_sample:
             db.use_sample(True)
     st.sidebar.warning("지금은 **가상 데이터**입니다. 실제 투찰에 쓰지 마세요.")
 
+if not use_sample and db.is_remote():
+    try:
+        db.query_df("SELECT 1 AS ok")
+    except Exception as _e:  # noqa: BLE001  연결 실패 원인을 비밀값 없이 보여줌
+        import re as _re
+        _msg = _re.sub(r"postgres(?:ql)?(?:\+\w+)?://\S+", "postgresql://***", str(getattr(_e, "orig", _e)))
+        _msg = _re.sub(r"password=\S+", "password=***", _msg)
+        st.error("데이터베이스(Neon)에 연결하지 못했습니다.")
+        st.code(_msg[:600])
+        _low = _msg.lower()
+        if "quota" in _low or "compute time" in _low:
+            st.warning("Neon 무료 사용 시간(월 한도)을 다 쓴 것 같습니다. console.neon.tech → Billing/Usage 화면을 캡처해 주세요.")
+        elif "password" in _low or "authentication" in _low:
+            st.warning("DB 비밀번호가 맞지 않습니다. Streamlit Secrets 의 DATABASE_URL 이 바뀌지 않았는지 확인하세요.")
+        elif "could not translate host" in _low or "name or service" in _low or "invalid" in _low:
+            st.warning("DB 주소 형식이 잘못됐습니다. Streamlit Secrets 의 DATABASE_URL 줄을 확인하세요 (따옴표 포함 한 줄).")
+        else:
+            st.info("잠시 뒤 새로고침해 보세요. 계속되면 이 화면을 캡처해 주세요. 그동안 사이드바의 샘플 데이터로 기능을 볼 수 있습니다.")
+        st.stop()
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("필터")
 _company = db.company()
