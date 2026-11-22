@@ -104,6 +104,26 @@ def build(n_bids: int = 600, seed: int = 7) -> str:
                 c = comp[rank - 1]
                 add("ranks", {"bid_key": key, "rank": rank, "bizno": c, "company": c,
                               "amount": float(amt), "rate": round(amt / plan * 100, 3), "note": ""})
+    # 한전 공고 (가상): 과거 150건(사정금액 있음) + 개찰 전 8건
+    places = ["울산본부 울산지사", "울산본부 동울산지사", "울산본부 양산지사", "부산울산본부", "경남본부 김해지사"]
+    for i in range(158):
+        upcoming = i >= 150
+        dt = datetime.now() + (timedelta(days=int(rng.integers(1, 10))) if upcoming
+                               else -timedelta(days=int(rng.integers(5, 360))))
+        base = float(round(rng.uniform(50_000_000, 2_000_000_000), -3))
+        place = random.choice(places)
+        add("kepco_bids", {
+            "bid_no": f"K{2026000000 + i}", "company": "COM01",
+            "name": f"[샘플] {random.choice(['울산', '울주', '동구'])} {random.choice(['배전선로 지중화 공사', '가공배전 전기공사', '변전소 전기설비 공사'])}",
+            "purchase_type": "ConstructionService", "item_type": "Construction", "place": place, "dept": place,
+            "notice_dt": (dt - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S"),
+            "attend_close_dt": (dt - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S"),
+            "end_dt": dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "progress": "AttendProgress" if upcoming else "Final", "competition": "Limited",
+            "bid_type": "QualifiedEval", "presumed_price": round(base / 1.1), "base_amt": base,
+            "approx_amt": None if upcoming else float(round(base * (1 + rng.normal(-0.002, 0.008)))),
+            "restrict_text": "울산광역시 소재 전기공사업 등록업체", "updated_at": "",
+        })
     for table, rows in T.items():
         db.upsert_many(table, rows)
     return SAMPLE_DB_PATH

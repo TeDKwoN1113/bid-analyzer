@@ -73,6 +73,8 @@ DEFAULT_SETTINGS = {
     "rank_max_bids_per_run": 300,
     "rank_lookback_days": 365,
     # 알림 (텔레그램/이메일) - 비밀값은 Secrets 에 넣음
+    # 한전 전력데이터개방포털 API 인증키 (Secrets 의 KEPCO_API_KEY)
+    "kepco_api_key": "",
     "telegram_bot_token": "",
     "telegram_chat_id": "",
     "email_user": "",          # 보내는 Gmail 주소
@@ -107,7 +109,7 @@ def load_settings() -> dict:
                 s[k] = v
     # 웹사이트(Streamlit Cloud)에서는 'Secrets'에 넣은 값을 우선 사용
     for env_name, field in (("DATA_GO_KR_KEY", "service_key"), ("APP_PASSWORD", "app_password"),
-                            ("DATABASE_URL", "database_url"),
+                            ("DATABASE_URL", "database_url"), ("KEPCO_API_KEY", "kepco_api_key"),
                             ("TELEGRAM_BOT_TOKEN", "telegram_bot_token"),
                             ("TELEGRAM_CHAT_ID", "telegram_chat_id"),
                             ("EMAIL_USER", "email_user"), ("EMAIL_PASSWORD", "email_password"),

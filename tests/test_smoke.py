@@ -141,6 +141,25 @@ def test_pick_scorecard(df):
     assert isinstance(text, str)
 
 
+def test_kepco_mapping_and_stats(df):
+    import kepco
+    rec = {"no": "E012512345", "companyId": "COM01", "name": "울산 배전선로 지중화 전기공사",
+           "itemType": "Construction", "purchaseType": "ConstructionService", "placeName": "울산본부",
+           "noticeDate": "20261120100000", "endDatetime": "20261201110000", "estimatedPriceBasicAmount": "1,234,000",
+           "approximateAmount": "1235000", "bidType": "QualifiedEval", "progressState": "OpenTimed",
+           "filenlink1": "http://srm.kepco.net/x", "filename1": "공고.pdf"}
+    m = kepco.map_row(rec)
+    assert m["bid_no"] == "E012512345" and m["base_amt"] == 1234000 and m["end_dt"] == "2026-12-01 11:00:00"
+    kb = kepco.load()
+    assert len(kb) >= 150 and kb["sajung"].between(95, 105).mean() > 0.9
+    loc = kepco.filter_bids(kb, region="울산", local_only=True)
+    assert len(loc) > 0
+    st_ = kepco.sajung_stats(kb, loc.iloc[0], "울산")
+    assert st_ and 98 < st_["중앙"] < 102
+    text, keys = notify.build(df)
+    assert any(k.startswith("KEPCO-") for k, _ in keys)
+
+
 def test_backtest_and_tune_rules(df):
     s, d = analysis.backtest(df, ["전기"], test_days=120, max_tests=20)
     assert not s.empty and set(s["방식"]) <= set(analysis.STRATEGIES.values())
@@ -162,7 +181,7 @@ def test_eligibility_regions():
 
 
 PAGES = ["🏠 오늘의 투찰", "📋 공고 현황", "📊 사정율 분석", "🧮 투찰 계산기", "📝 우리 투찰",
-         "🏢 경쟁업체", "🔬 추천 검증", "📖 사용법", "⬇️ 데이터 수집", "⚙️ 설정 · API 점검"]
+         "🏢 경쟁업체", "🔌 한전 입찰", "🔬 추천 검증", "📖 사용법", "⬇️ 데이터 수집", "⚙️ 설정 · API 점검"]
 
 
 @pytest.mark.parametrize("page", PAGES)

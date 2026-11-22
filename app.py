@@ -1,5 +1,6 @@
 """입찰 분석 프로그램 (화면). 실행: streamlit run app.py"""
 import os
+import json
 from datetime import date, timedelta
 
 import pandas as pd
@@ -66,7 +67,7 @@ if _pw and not st.session_state.get("authed"):
 # ---------------- 사이드바 ----------------
 st.sidebar.title("⚡ 입찰 분석기")
 page = st.sidebar.radio("메뉴", ["🏠 오늘의 투찰", "📋 공고 현황", "📊 사정율 분석", "🧮 투찰 계산기", "📝 우리 투찰",
-                               "🏢 경쟁업체", "🔬 추천 검증", "📖 사용법", "⬇️ 데이터 수집", "⚙️ 설정 · API 점검"])
+                               "🏢 경쟁업체", "🔌 한전 입찰", "🔬 추천 검증", "📖 사용법", "⬇️ 데이터 수집", "⚙️ 설정 · API 점검"])
 
 use_sample = st.sidebar.toggle("샘플(연습용) 데이터로 보기", value=not settings["service_key"],
                                help="API 연결 전에 기능을 미리 써보는 가상 데이터입니다.")
@@ -690,6 +691,90 @@ elif page == "🏢 경쟁업체":
                            "투찰사정율(%)": st.column_config.NumberColumn(format="%.3f")})
 
 # ---------------- 추천 검증 ----------------
+elif page == "🔌 한전 입찰":
+    import kepco
+    st.header("🔌 한전 입찰 (전력그룹사 전자입찰)")
+    st.caption("한전 전력데이터개방포털 API로 받은 공고입니다. 개찰 순위·1순위 금액은 API에 없어서, "
+               "개찰 후 공개되는 '사정금액'으로 과거 사정율 분포를 보여줍니다. 투찰은 한전 SRM(srm.kepco.net)에서 합니다.")
+    if not settings.get("kepco_api_key"):
+        st.warning("한전 API 인증키가 없습니다. 사용법: 전력데이터개방포털(bigdata.kepco.co.kr) 회원가입 → "
+                   "API 인증키 신청 → 받은 40자리 키를 Streamlit Secrets 와 GitHub Secrets 에 "
+                   "`KEPCO_API_KEY` 이름으로 넣기.")
+    kb_all = kepco.load()
+    if kb_all.empty:
+        st.info("아직 받은 한전 공고가 없습니다. 인증키를 넣은 뒤 아래 버튼으로 받거나, 다음 자동 수집을 기다리세요.")
+    k1, k2 = st.columns(2)
+    if k1.button("한전 공고 지금 받기 (최근 60일)", disabled=not settings.get("kepco_api_key")):
+        with st.spinner("받는 중…"):
+            try:
+                n = kepco.collect(date.today() - timedelta(days=60), date.today())
+                st.success(f"{n:,}건 받았습니다.")
+                kb_all = kepco.load()
+            except Exception as e:  # noqa: BLE001
+                st.error(f"실패: {e}")
+    if not kb_all.empty:
+        reg = db.company()["region"] or "울산"
+        local_only = k2.toggle(f"{reg} 관련 공고만", value=True)
+        kw_extra = st.text_input("공고명 키워드 (쉼표 구분, 비우면 전기·배전·송전 등 기본)", "")
+        kws = [x.strip() for x in kw_extra.split(",") if x.strip()] or None
+        kb = kepco.filter_bids(kb_all, region=reg, keywords=kws, local_only=local_only)
+        now = pd.Timestamp.now()
+        dl = kb["end_dt"].fillna(kb["attend_close_dt"])
+        up = kb[dl >= now].assign(_dl=dl).sort_values("_dl")
+        st.markdown(f"진행 중 **{len(up)}건** · 1년간 공사 공고 **{len(kb)}건** · 사정율 확인 **{kb['sajung'].notna().sum()}건**")
+        rows_k = []
+        for _, r in up.head(100).iterrows():
+            stt = kepco.sajung_stats(kb_all, r, reg) if pd.notna(r["base_amt"]) else None
+            amt = None
+            if stt and pd.notna(r["base_amt"]):
+                amt = r["base_amt"] * stt["중앙"] / 100
+            files = []
+            try:
+                files = json.loads(r["files"]) if isinstance(r["files"], str) else []
+            except ValueError:
+                pass
+            rows_k.append({
+                "D-day": f"D-{max((r['_dl'].normalize() - now.normalize()).days, 0)}",
+                "공고명": r["name"], "발주": f"{r['발주사']} {r['place'] or ''}".strip(),
+                "추정가격": won(r["presumed_price"]) if pd.notna(r["presumed_price"]) else "",
+                "기초금액": won(r["base_amt"]) if pd.notna(r["base_amt"]) else "미공개",
+                "입찰신청마감": "" if pd.isna(r["attend_close_dt"]) else r["attend_close_dt"].strftime("%m/%d %H:%M"),
+                "입찰마감": "" if pd.isna(r["end_dt"]) else r["end_dt"].strftime("%m/%d %H:%M"),
+                "과거 사정율(중앙)": f"{stt['중앙']:.2f}% ({stt['기준']} {stt['n']}건)" if stt else "",
+                "예정가격 예상(중앙)": won(amt) if amt else "",
+                "낙찰방법": r["낙찰방법"] or "", "상태": r["상태"] or "",
+                "공고문": files[0][1] if files else None,
+            })
+        if rows_k:
+            st.dataframe(pd.DataFrame(rows_k), hide_index=True, use_container_width=True,
+                         column_config={"공고문": st.column_config.LinkColumn("공고문", display_text="열기"),
+                                        "공고명": st.column_config.TextColumn(width="large")})
+            st.caption("예정가격 예상 = 기초금액 × 과거 사정율 중앙값. 투찰금액은 (예정가격 − A값) × 하한율 + A값 이므로 "
+                       "공고문의 하한율·A값을 🧮 투찰 계산기에 넣어 계산하세요.")
+        else:
+            st.info("진행 중인 공고가 없습니다.")
+        done_k = kb[kb["sajung"].notna()]
+        if len(done_k) >= 5:
+            st.subheader("📊 한전 공사 사정율 분포")
+            fig = px.histogram(done_k, x="sajung", nbins=40, labels={"sajung": "사정율(%)"})
+            fig.update_layout(height=320, margin=dict(t=20))
+            st.plotly_chart(fig, use_container_width=True)
+            by_place = (done_k.groupby("place")["sajung"].agg(["count", "median", "mean"])
+                        .sort_values("count", ascending=False).head(20).reset_index()
+                        .rename(columns={"place": "사업소", "count": "건수", "median": "중앙", "mean": "평균"}))
+            st.dataframe(by_place, hide_index=True, use_container_width=True,
+                         column_config={"중앙": st.column_config.NumberColumn(format="%.3f"),
+                                        "평균": st.column_config.NumberColumn(format="%.3f")})
+    with st.expander("🔍 한전 API 원본 확인 (항목 점검용)"):
+        if st.button("최근 7일 원본 1건 보기", disabled=not settings.get("kepco_api_key")):
+            try:
+                raw_k = kepco.fetch(date.today() - timedelta(days=7), date.today())
+                st.caption(f"{len(raw_k)}건 응답")
+                if raw_k:
+                    st.json(raw_k[0])
+            except Exception as e:  # noqa: BLE001
+                st.error(str(e))
+
 elif page == "🔬 추천 검증":
     st.header("🔬 추천 방식 검증 (백테스트)")
     st.markdown(

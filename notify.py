@@ -256,6 +256,34 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
             _more(lines, len(sc))
             parts.append("\n".join(lines))
 
+    # 3-2) 한전 새 공고 (공사 · 전기 관련)
+    try:
+        import kepco
+        kb = kepco.load()
+        if not kb.empty:
+            reg = db.company()["region"]
+            kb = kepco.filter_bids(kb, region=reg, local_only=scope() == "local")
+            dl = kb["end_dt"].fillna(kb["attend_close_dt"])
+            kb = kb[(dl >= now) & (kb["notice_dt"] >= now - pd.Timedelta(days=7))]
+            kb = kb[~kb["bid_no"].map(lambda k: ("KEPCO-" + k, "new") in done).astype(bool)].sort_values("end_dt")
+            if len(kb):
+                lines = [f"🔌 <b>한전 새 공고 {len(kb)}건</b>"]
+                for _, r in kb.head(DETAIL_MAX).iterrows():
+                    amt = r["base_amt"] if pd.notna(r["base_amt"]) else r["presumed_price"]
+                    st_ = kepco.sajung_stats(kepco.load_cached(), r, reg) if pd.notna(r["base_amt"]) else None
+                    line = (f"• {_e(r['name'])}\n  {_e(r['발주사'])} {_e(r['place'] or '')} | "
+                            f"{'기초' if pd.notna(r['base_amt']) else '추정'} {_won(amt)}\n"
+                            f"  입찰신청마감 {_dt(r['attend_close_dt'])} | 입찰마감 {_dt(r['end_dt'])} | {_e(r['낙찰방법'] or '')}")
+                    if st_:
+                        line += (f"\n  과거 사정율({_e(st_['기준'])} {st_['n']}건): 보통 {st_['q25']:.2f}~{st_['q75']:.2f}% "
+                                 f"(중앙 {st_['중앙']:.2f}%)")
+                    lines.append(line)
+                keys += [("KEPCO-" + k, "new") for k in kb["bid_no"]]
+                _more(lines, len(kb))
+                parts.append("\n".join(lines))
+    except Exception as e:  # noqa: BLE001
+        print("한전 알림 생략:", e)
+
     # 4) 우리 투찰 결과
     mb = analysis.my_bids_view(df)
     if not mb.empty:

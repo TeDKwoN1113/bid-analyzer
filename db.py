@@ -78,6 +78,14 @@ TABLES = {
     "pick_log": ("""
         bid_key TEXT, day TEXT, sajung REAL, amount REAL, prob REAL, at TEXT
     """, ["bid_key", "day"]),
+    # 한전(전력그룹사) 전자입찰 공고
+    "kepco_bids": ("""
+        bid_no TEXT, company TEXT, name TEXT, purchase_type TEXT, item_type TEXT, place TEXT, dept TEXT,
+        notice_dt TEXT, attend_close_dt TEXT, begin_dt TEXT, end_dt TEXT, progress TEXT, competition TEXT,
+        bid_type TEXT, bid_type_desc TEXT, presumed_price DOUBLE PRECISION, presumed_amount DOUBLE PRECISION,
+        base_amt DOUBLE PRECISION, approx_amt DOUBLE PRECISION, contract_amt DOUBLE PRECISION,
+        restrict_text TEXT, qualification TEXT, location TEXT, files TEXT, updated_at TEXT
+    """, ["bid_no"]),
     "kv": ("""
         k TEXT, v TEXT
     """, ["k"]),

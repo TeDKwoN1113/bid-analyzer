@@ -301,6 +301,14 @@ def auto(progress=print) -> dict:
         summary[label] = res
         if progress:
             progress(f"{label}: {res['count']:,}건, {msg}")
+    try:
+        import kepco
+        summary["한전"] = kepco.auto(progress)
+        if progress:
+            progress(summary["한전"])
+    except Exception as e:  # noqa: BLE001  한전 문제로 나라장터 수집이 멈추지 않게
+        if progress:
+            progress(f"한전 수집 실패: {e}")
     r = collect_ranks_auto()
     summary["개찰순위"] = r
     summary["우리 투찰"] = update_my_bids(progress)
