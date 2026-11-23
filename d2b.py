@@ -28,7 +28,10 @@ PREFIX = "D2B"
 WINDOW = 30               # 목록 조회 기간(일)
 NOTICE_DAYS = 45          # 매번 다시 보는 최근 공고 기간
 BACKFILL_DAYS = 365       # 결과(개찰) 과거 채우기
-MAX_DETAIL = 200          # 한 번 실행에 상세 조회할 최대 공고 수 (하루 호출 한도 보호)
+# 하루 호출 한도(개발계정 약 1,000회)를 하루 여러 번 실행(새벽 전체 1 + 평일 낮 3)과 사이트 점검이 나눠 쓰도록
+BUDGET_FULL = {"notice": 120, "result": 90, "backfill": 150}   # 새벽 전체 수집 (상세 호출 수)
+BUDGET_QUICK = {"notice": 40, "result": 30, "backfill": 0}     # 낮 빠른 수집
+MAX_DETAIL = 120
 
 A_FIELDS = {"inanAmnt": "국민연금보험료", "inheAmnt": "국민건강보험료", "treaAmnt": "노인장기요양보험료",
             "retiDedu": "퇴직공제부금비", "safeAmnt": "산업안전보건관리비", "safeCost": "안전관리비",
@@ -254,6 +257,8 @@ def collect_notices(d1: date, d2: date, progress=None, budget: int = MAX_DETAIL)
         d = e + timedelta(days=1)
     done = _done("d2b_notice")
     saved = 0
+    # 개찰이 아직 안 된 공고부터 (참가등록·투찰을 놓치지 않는 게 먼저)
+    lst.sort(key=lambda x: str(x.get("opengDt") or ""), reverse=True)
     for r in lst:
         if str(r.get("busiDivs", "공사")).find("공사") < 0 or "용역" in str(r.get("cntrwkNm", "")):
             continue
@@ -285,7 +290,7 @@ def collect_notices(d1: date, d2: date, progress=None, budget: int = MAX_DETAIL)
     return len(lst), saved
 
 
-def collect_results(d1: date, d2: date, progress=None, budget: int = MAX_DETAIL) -> tuple[int, int]:
+def collect_results(d1: date, d2: date, progress=None, budget: int = MAX_DETAIL) -> tuple[int, int, bool]:
     """시설 경쟁입찰결과 목록 → 우리 업종 공고의 상세·복수예비가격·참가업체 → 저장."""
     lst = []
     d = d1
@@ -295,12 +300,13 @@ def collect_results(d1: date, d2: date, progress=None, budget: int = MAX_DETAIL)
         d = e + timedelta(days=1)
     done = _done("d2b_result")
     known = set(db.query_df("SELECT bid_key FROM bids WHERE bid_key LIKE 'D2B%'")["bid_key"])
-    saved = 0
+    saved, complete = 0, True
     for r in sorted(lst, key=lambda x: str(x.get("opengDt") or x.get("opengDate") or ""), reverse=True):
         key = keys(r)[0]
         if key in done or "용역" in str(r.get("cntrwkNm", "")) or not (key in known or is_target(r.get("cntrwkNm"))):
             continue
         if budget <= 0:
+            complete = False
             break
         od = str(r.get("opengDate") or r.get("opengDt") or "")[:10].replace("-", "")[:8]
         base_p = {"cntrwkNo": r.get("cntrwkNo"), "orntCode": r.get("orntCode")}
@@ -333,8 +339,8 @@ def collect_results(d1: date, d2: date, progress=None, budget: int = MAX_DETAIL)
         _record_ours(key, bidders)
         saved += 1
     if progress:
-        progress(f"국방 개찰결과: 목록 {len(lst):,}건 · 우리 업종 저장 {saved}건")
-    return len(lst), saved
+        progress(f"국방 개찰결과: 목록 {len(lst):,}건 · 우리 업종 저장 {saved}건" + ("" if complete else " (다음에 이어서)"))
+    return len(lst), saved, complete
 
 
 def _record_ours(key: str, bidders: list[dict]) -> None:
@@ -355,23 +361,26 @@ def _record_ours(key: str, bidders: list[dict]) -> None:
 
 
 def auto(progress=print, quick: bool = False) -> str:
-    """최근 공고 + 최근 결과 (+ 결과 과거 채우기). 한도 초과면 다음에 이어서."""
+    """최근 공고(먼저) + 최근 결과 (+ 결과 과거 채우기). 하루 호출 한도를 나눠 쓰고, 넘으면 다음에 이어서."""
     today = date.today()
+    b = BUDGET_QUICK if quick else BUDGET_FULL
     msgs = []
     try:
-        n1, s1 = collect_notices(today - timedelta(days=3 if quick else NOTICE_DAYS), today, progress)
+        n1, s1 = collect_notices(today - timedelta(days=3 if quick else NOTICE_DAYS), today, progress,
+                                 budget=b["notice"])
         msgs.append(f"공고 {s1}건")
-        n2, s2 = collect_results(today - timedelta(days=3 if quick else 30), today, progress)
+        _, s2, _ = collect_results(today - timedelta(days=3 if quick else 30), today, progress, budget=b["result"])
         msgs.append(f"결과 {s2}건")
-        if not quick:
+        if b["backfill"]:
             back = db.get_kv("d2b_backfill_to")
             start = pd.Timestamp(back).date() if back else today - timedelta(days=31)
             oldest = today - timedelta(days=BACKFILL_DAYS)
             if start > oldest:
-                b1 = max(oldest, start - timedelta(days=90))
-                _, s3 = collect_results(b1, start, progress, budget=MAX_DETAIL)
-                db.set_kv("d2b_backfill_to", (b1 - timedelta(days=1)).isoformat())
-                msgs.append(f"과거 결과 {s3}건 ({b1}~{start})")
+                b1 = max(oldest, start - timedelta(days=30))
+                _, s3, complete = collect_results(b1, start, progress, budget=b["backfill"])
+                if complete:   # 이 기간을 다 끝냈을 때만 다음 기간으로 (못 끝낸 공고를 건너뛰지 않게)
+                    db.set_kv("d2b_backfill_to", (b1 - timedelta(days=1)).isoformat())
+                msgs.append(f"과거 결과 {s3}건 ({b1}~{start}{'' if complete else ', 이어서'})")
     except api_client.QuotaError as e:
         msgs.append(f"호출 한도 초과 → 다음에 이어서 ({e})")
     except api_client.KeyError_ as e:
