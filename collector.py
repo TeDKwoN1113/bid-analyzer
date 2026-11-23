@@ -708,8 +708,35 @@ if __name__ == "__main__":
     ap.add_argument("--to", dest="d2")
     ap.add_argument("--auto", action="store_true", help="최근 3일 + 과거 데이터 자동 채우기")
     ap.add_argument("--quick", action="store_true", help="어제·오늘 공고/기초금액/개찰결과만 빠르게")
+    ap.add_argument("--scheduled", action="store_true",
+                    help="예약 실행: 오늘 전체 수집이 안 됐으면 전체, 최근 2시간 반 안에 안 돌았으면 빠른 수집, 아니면 건너뜀")
     a = ap.parse_args()
     print("DB:", "원격(PostgreSQL)" if db.is_remote() else db.url())
+    if a.scheduled:
+        # GitHub 예약 실행은 늦어지거나 빠지기도 해서 예약을 여러 번 걸어 두고, 여기서 실제로 돌지 정함
+        import os
+        now = datetime.now()
+        last_full = db.get_kv("last_full_date") or ""
+        if last_full != date.today().isoformat():
+            # 기록이 없던 예전 실행도 인정: 오늘 '(자동)' 수집 기록이 있으면 전체 수집 완료로 봄
+            done_today = db.query_df("SELECT COUNT(*) AS n FROM collect_log WHERE kind LIKE '%(자동)%' AND run_at >= :d",
+                                     {"d": date.today().isoformat()})
+            if int(done_today["n"].iloc[0]):
+                last_full = date.today().isoformat()
+        last_any = db.get_kv("last_collect_at") or ""
+        recent = last_any and (now - datetime.fromisoformat(last_any)).total_seconds() < 2.5 * 3600
+        if last_full != date.today().isoformat():
+            a.auto = True
+            print("예약 실행 → 오늘 전체 수집이 아직 안 돼서 전체 수집")
+        elif not recent and now.weekday() < 5 and 8 <= now.hour < 19:
+            a.quick = True
+            print("예약 실행 → 빠른 수집")
+        else:
+            print(f"예약 실행 → 최근에 수집함({last_any[:16]}) → 건너뜀")
+            if os.environ.get("GITHUB_OUTPUT"):
+                with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                    f.write("skip=true\n")
+            raise SystemExit(0)
     if a.auto or a.quick:
         try:
             import notify
@@ -718,6 +745,9 @@ if __name__ == "__main__":
         except Exception as e:  # noqa: BLE001
             print("알림 채널 확인 실패:", e)
         auto() if a.auto else quick()
+        db.set_kv("last_collect_at", datetime.now().isoformat(timespec="minutes"))
+        if a.auto:
+            db.set_kv("last_full_date", date.today().isoformat())
         print_status()
         raise SystemExit(0)
     if a.d1:

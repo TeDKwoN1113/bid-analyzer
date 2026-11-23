@@ -1,9 +1,12 @@
 name: 매일 자동 수집
 
 on:
+  # GitHub 예약 실행은 늦어지거나 빠지기도 해서 여러 번 걸어 두고, 실제로 돌지는 collector.py --scheduled 가 정함
+  #  - 오늘 전체 수집이 아직이면 → 전체 수집 (새벽에 빠져도 다음 예약에서 따라잡음)
+  #  - 최근 2시간 반 안에 수집했으면 → 바로 끝냄 (알림도 생략)
   schedule:
-    - cron: "17 20 * * *"        # 매일 05:17 (한국시간) - 전체 수집 + 과거 데이터 채우기 + 알림
-    - cron: "7 0,4,8 * * 1-5"    # 평일 09:07, 13:07, 17:07 (한국시간) - 빠른 수집 + 알림
+    - cron: "41 19,20,21 * * *"  # 매일 04:41, 05:41, 06:41 (한국시간) - 전체 수집
+    - cron: "23 0-9/2 * * 1-5"   # 평일 09:23, 11:23, 13:23, 15:23, 17:23 (한국시간) - 빠른 수집
   workflow_dispatch:              # Actions 화면에서 "Run workflow" 버튼으로 바로 실행 (전체 수집)
 
 concurrency:
@@ -39,14 +42,15 @@ jobs:
           path: data/cache
           key: dscache-${{ github.run_id }}
           restore-keys: dscache-
-      - name: 빠른 수집 (낮 시간)
-        if: github.event.schedule == '7 0,4,8 * * 1-5'
-        run: python collector.py --quick
-      - name: 전체 수집 (최근 3일 + 과거 데이터 채우기 + 관심공고 개찰순위)
-        if: github.event.schedule != '7 0,4,8 * * 1-5'
+      - name: 예약 수집 (필요할 때만 전체/빠른 수집)
+        id: sched
+        if: github.event_name == 'schedule'
+        run: python collector.py --scheduled
+      - name: 전체 수집 (수동 실행)
+        if: github.event_name != 'schedule'
         run: python collector.py --auto
       - name: 알림 보내기
-        if: always()
+        if: always() && steps.sched.outputs.skip != 'true'
         run: python notify.py
       - name: 분석 표 캐시 저장
         if: always()
