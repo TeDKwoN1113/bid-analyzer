@@ -186,6 +186,19 @@ def _latest_order(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns="_ord").reset_index(drop=True)
 
 
+def is_d2b(key) -> bool:
+    """국방전자조달(방위사업청) 공고인지 (공고번호가 D2B 로 시작)."""
+    return str(key or "").startswith("D2B")
+
+
+def reg_deadline(df: pd.DataFrame) -> pd.Series:
+    """입찰참가등록 마감 — 국방 공고만 의미 있음 (나라장터는 공고별 참가등록이 사실상 없음)."""
+    if "qual_dt" not in df:
+        return pd.Series(pd.NaT, index=df.index)
+    q = pd.to_datetime(df["qual_dt"], errors="coerce", format="mixed")
+    return q.where(df["bid_key"].astype(str).str.startswith("D2B"))
+
+
 def eligible(df: pd.DataFrame, company_region: str | None = None,
              company_licenses: list[str] | None = None) -> pd.Series:
     """우리 회사가 참가 가능한 공고인지.

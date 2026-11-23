@@ -282,17 +282,27 @@ def test_revised_and_cancelled_notices():
 
 
 def test_qualification_deadline_reminder(df):
+    """참가등록 마감 알림: 나라장터는 없음, 국방·한전은 전날/당일."""
     db.use_sample(True)
-    k = upcoming(df).iloc[0]["bid_key"]
     now = pd.Timestamp.now()
-    if now >= now.normalize() + pd.Timedelta(hours=23, minutes=50):
-        pytest.skip("자정 직전에는 '오늘 마감'을 만들 수 없음")
-    soon = min(now + pd.Timedelta(hours=3), now.normalize() + pd.Timedelta(hours=23, minutes=59)) \
-        .strftime("%Y-%m-%d %H:%M:%S")
-    db.execute("UPDATE bids SET qual_dt = :q WHERE bid_key = :k", {"q": soon, "k": k})
+    tomorrow = (now.normalize() + pd.Timedelta(days=1, hours=10)).strftime("%Y-%m-%d %H:%M:%S")
+    k = upcoming(df).iloc[0]["bid_key"]
+    db.execute("UPDATE bids SET qual_dt = :q WHERE bid_key = :k", {"q": tomorrow, "k": k})
+    # 같은 공고를 국방 공고로 복제
+    row = db.query_df("SELECT * FROM bids WHERE bid_key = :k", {"k": k}).iloc[0].to_dict()
+    row.update({"bid_key": "D2BTEST_1-000", "bid_no": "D2BTEST_1", "bid_ord": "000"})
+    db.upsert_many("bids", [row])
+    for t in ("regions", "licenses"):
+        db.upsert_many(t, [{"bid_key": "D2BTEST_1-000", ("region" if t == "regions" else "license"):
+                            ("울산광역시" if t == "regions" else "전기공사업")}])
+    kb = db.query_df("SELECT bid_no FROM kepco_bids").iloc[-1]["bid_no"]
+    db.execute("UPDATE kepco_bids SET attend_close_dt = :q, end_dt = :e WHERE bid_no = :n",
+               {"q": tomorrow, "e": (now + pd.Timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S"), "n": kb})
     text, keys = notify.build(analysis.load_dataset())
-    assert (k, "qual") in keys and "참가신청 마감" in text
-
+    assert (k, "qual1") not in keys and (k, "qual0") not in keys          # 나라장터: 참가등록 알림 없음
+    assert ("D2BTEST_1-000", "qual1") in keys                              # 국방: 전날 알림
+    assert ("KEPCO-" + kb, "qual1") in keys                                # 한전: 전날 알림
+    assert "입찰참가등록 마감 임박" in text
 
 def test_weekly_report(df):
     db.use_sample(True)

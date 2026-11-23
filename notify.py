@@ -167,17 +167,40 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
             keys.append((r["bid_key"], "deadline"))
         parts.append("\n".join(lines))
 
-    # 0-1) 오늘 참가신청(입찰참가자격 등록) 마감
-    qd = pd.to_datetime(t["qual_dt"], errors="coerce", format="mixed") if "qual_dt" in t else pd.Series(pd.NaT, index=t.index)
-    qq = t[(qd >= now) & (qd <= now.normalize() + pd.Timedelta(days=1)) & (t["open_date"] >= now)]
-    qq = qq[~qq["bid_no"].isin(mine)]
-    qq = qq[~qq["bid_key"].map(lambda k: (k, "qual") in done).astype(bool)]
-    if len(qq):
-        lines = [f"📝 <b>오늘 참가신청 마감 {len(qq)}건</b> (나라장터에서 입찰참가 신청 필요)"]
-        for _, r in qq.assign(_q=qd).sort_values("_q").iterrows():
-            lines.append(f"• {_title(r)}\n  참가신청 마감 {r['_q'].strftime('%H:%M')} | 투찰마감 {_dt(r['close_dt'])}")
-            keys.append((r["bid_key"], "qual"))
-        parts.append("\n".join(lines))
+    # 0-1) 입찰참가등록 마감 임박 (국방·한전 — 등록 못 하면 투찰 불가). 전날·당일 두 번 알림
+    def _when(ts):
+        d = (ts.normalize() - now.normalize()).days
+        return ("qual0", "오늘") if d <= 0 else ("qual1", "내일")
+    reg = []
+    qd = analysis.reg_deadline(t)
+    qq = t.assign(_q=qd)
+    qq = qq[(qq["_q"] >= now) & (qq["_q"] < now.normalize() + pd.Timedelta(days=2)) & ~qq["bid_no"].isin(mine)]
+    for _, r in qq.sort_values("_q").iterrows():
+        kind, label = _when(r["_q"])
+        if (r["bid_key"], kind) not in done:
+            reg.append((r["_q"], f"• [국방] {_title(r)}\n  ⛔ 참가등록 마감 <b>{label} {r['_q'].strftime('%H:%M')}</b> | "
+                                 f"투찰마감 {_dt(r['close_dt'])} | 국방전자조달(d2b.go.kr)", (r["bid_key"], kind)))
+    try:
+        import kepco
+        kb = kepco.load()
+        if not kb.empty:
+            kb = kepco.filter_bids(kb, region=db.company()["region"], local_only=True)
+            kb = kb[(kb["attend_close_dt"] >= now) & (kb["attend_close_dt"] < now.normalize() + pd.Timedelta(days=2))]
+            for _, r in kb.sort_values("attend_close_dt").iterrows():
+                kind, label = _when(r["attend_close_dt"])
+                key = "KEPCO-" + r["bid_no"]
+                if (key, kind) not in done:
+                    reg.append((r["attend_close_dt"], f"• [한전] {_e(r['name'])}\n  ⛔ 입찰신청 마감 <b>{label} "
+                                f"{r['attend_close_dt'].strftime('%H:%M')}</b> | 입찰마감 {_dt(r['end_dt'])} | 한전 SRM",
+                                (key, kind)))
+    except Exception as e:  # noqa: BLE001
+        print("한전 참가신청 알림 생략:", e)
+    if reg:
+        reg.sort(key=lambda x: x[0])
+        lines = [f"⛔ <b>입찰참가등록 마감 임박 {len(reg)}건</b> (등록하지 않으면 투찰할 수 없어요)"]
+        lines += [x[1] for x in reg]
+        keys += [x[2] for x in reg]
+        parts.insert(0, "\n".join(lines))
 
     # 1) 새 공고 (최근 3일 내 공고, 아직 개찰 전)
     new = t[(t["open_date"] >= now) & (notice >= now - pd.Timedelta(days=3))]
@@ -191,7 +214,8 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
             lines.append(f"• {_title(r)}\n  {_e(r['org'])} | 참가지역 {_e(limit)}\n"
                          f"  {'기초' if pd.notna(r['base_amt']) else '추정'} {_won(amt)} | "
                          f"개찰 {_dt(r['open_dt'])} | {_e(r['contract_method'] or r['method'])}"
-                         + (f"\n  📝 참가신청 마감 {_dt(r['qual_dt'])}" if pd.notna(pd.to_datetime(r.get('qual_dt'), errors='coerce', format='mixed')) else ""))
+                         + (f"\n  ⛔ 참가등록 마감 {_dt(r['qual_dt'])} (국방전자조달)" if analysis.is_d2b(r["bid_key"])
+                            and pd.notna(pd.to_datetime(r.get('qual_dt'), errors='coerce', format='mixed')) else ""))
             keys.append((r["bid_key"], "new"))
         _more(lines, len(new))
         parts.append("\n".join(lines))

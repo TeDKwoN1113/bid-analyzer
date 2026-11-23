@@ -223,10 +223,19 @@ if page == "🏠 오늘의 투찰":
     # ── 공고 일정 달력 (참가등록마감·투찰마감·개찰 건수) ──
     wd = "월화수목금토일"
     days = [now.normalize() + pd.Timedelta(days=i) for i in range(-3, 13)]
-    qd_all = pd.to_datetime(elig["qual_dt"], errors="coerce", format="mixed").dt.normalize() \
-        if "qual_dt" in elig else pd.Series(pd.NaT, index=elig.index)
-    cal_rows = {"참가등록마감": qd_all.value_counts(),
-                "투찰마감": elig["close_date"].dt.normalize().value_counts(),
+    qd_all = analysis.reg_deadline(elig).dt.normalize()
+    close_all = elig["close_date"].dt.normalize()
+    try:  # 한전 공고(참가 가능)도 달력에 함께 — 입찰신청 마감이 중요
+        import kepco
+        _kb = kepco.load()
+        if not _kb.empty:
+            _kb = kepco.filter_bids(_kb, region=_company["region"] or "울산", local_only=True)
+            qd_all = pd.concat([qd_all, _kb["attend_close_dt"].dt.normalize()])
+            close_all = pd.concat([close_all, _kb["end_dt"].dt.normalize()])
+    except Exception:  # noqa: BLE001
+        pass
+    cal_rows = {"참가등록마감(국방·한전)": qd_all.value_counts(),
+                "투찰마감": close_all.value_counts(),
                 "개찰": elig["open_date"].dt.normalize().value_counts()}
     head = "".join(
         f"<th style='{'background:#ffe3ea;' if d == now.normalize() else ''}"
@@ -297,7 +306,7 @@ if page == "🏠 오늘의 투찰":
                 "참가지역": r["allowed_regions"] or ("제한없음" if r["allowed_regions_known"] else "확인중"),
                 "추정가격": won(r["est_price"]) if pd.notna(r["est_price"]) else "",
                 "기초금액": won(r["base_amt"]) if pd.notna(r["base_amt_notice"]) else "미공개",
-                "참가등록마감": _dt_s(r.get("qual_dt")),
+                "참가등록마감": _dt_s(r.get("qual_dt")) if analysis.is_d2b(r["bid_key"]) else "",
                 "투찰마감": _dt_s(r["close_date"]),
                 "개찰": _dt_s(r["open_date"]),
                 "💰 투찰금액": f"{pk['투찰금액']:,}원" if pk else "",
@@ -324,14 +333,18 @@ if page == "🏠 오늘의 투찰":
             st.caption(f"{r['org']} · 참가지역 {limit} · 투찰마감 "
                        f"{'-' if pd.isna(r['close_date']) else r['close_date'].strftime('%m/%d %H:%M')} · "
                        f"개찰 {r['open_date'].strftime('%m/%d %H:%M')} · {r['contract_method'] or r['method'] or ''}")
-            qd = pd.to_datetime(r.get("qual_dt"), errors="coerce", format="mixed")
-            if pd.notna(qd) and qd >= now:
+            qd = pd.to_datetime(r.get("qual_dt"), errors="coerce", format="mixed") if analysis.is_d2b(r["bid_key"]) else pd.NaT
+            if analysis.is_d2b(r["bid_key"]):
+                st.caption("🪖 국방전자조달(d2b.go.kr) 공고 — 입찰참가등록을 해야 투찰할 수 있어요")
+            if pd.notna(qd):
                 left = (qd.normalize() - now.normalize()).days
-                txt = f"참가신청 마감 {qd.strftime('%m/%d %H:%M')}"
-                if left <= 1:
-                    st.markdown(f":red[**📝 {txt} ({'오늘' if left == 0 else '내일'})** — 아직 안 했다면 나라장터에서 참가신청하세요]")
+                txt = f"참가등록 마감 {qd.strftime('%m/%d %H:%M')}"
+                if qd < now:
+                    st.caption(f"⛔ {txt} (지남 — 등록했으면 투찰 가능)")
+                elif left <= 1:
+                    st.markdown(f":red[**⛔ {txt} ({'오늘' if left == 0 else '내일'})** — 아직 안 했다면 국방전자조달에서 참가등록하세요]")
                 else:
-                    st.caption(f"📝 {txt} (D-{left})")
+                    st.caption(f"⛔ {txt} (D-{left})")
             docs = []
             if isinstance(r.get("spec_docs"), str):
                 try:
