@@ -516,48 +516,107 @@ def pending_rank_bids(limit: int) -> list[tuple[str, str]]:
     return list(zip(df["bid_no"], df["bid_ord"]))
 
 
-def update_my_bids(progress=None) -> str:
-    """우리 회사 투찰 결과 채우기.
+def _biz(x) -> str:
+    return str(x or "").replace("-", "").strip()
 
-    1) 기록한 공고가 개찰되면 개찰순위 전체를 받아 우리 사업자번호의 순위를 찾음
-    2) 이미 받은 개찰순위에 우리 회사가 있으면 투찰 기록에 자동 추가
+
+def find_our_bid(bid_no: str, bid_ord: str, bizno: str) -> dict | None:
+    """개찰순위 전체에서 우리 회사 줄을 찾음. 상위 100개 + 우리 줄만 저장 (저장 공간 절약)."""
+    s = load_settings()
+    params = {"bidNtceNo": bid_no, "bidNtceOrd": bid_ord}
+    div = s["inqry_div_bidno"].get("ranks")
+    if div:
+        params["inqryDiv"] = div
+    items = api_client.call_all("ranks", params)
+    key = f"{bid_no}-{bid_ord}"
+    rows = [map_rank(key, r) for r in items]
+    ours = next((r for r in rows if _biz(r["bizno"]) == bizno), None)
+    keep = sorted((r for r in rows if r["rank"] > 0), key=lambda r: r["rank"])[:100]
+    if ours and ours not in keep:
+        keep.append(ours)
+    db.upsert_many("ranks", keep or [{"bid_key": key, "rank": 0, "bizno": "", "company": None,
+                                      "amount": None, "rate": None, "note": "순위없음"}])
+    return ours
+
+
+def update_my_bids(progress=None, scan_limit: int = 80) -> str:
+    """우리 회사 투찰 결과 채우기 (실제 투찰금액·순위는 개찰순위에서 사업자번호로 찾음).
+
+    1) 기록한 공고가 개찰되면 개찰순위 전체에서 우리 줄을 찾아 '실제 금액'과 순위를 채움
+    2) 기록하지 않았어도, 최근 개찰된 우리 참가 가능 공고는 개찰순위를 훑어 우리가 넣은 공고를 자동 추가
     """
     c = db.company()
-    if not c["bizno"]:
+    biz = _biz(c["bizno"])
+    if not biz:
         return "회사 사업자번호 미등록 → 건너뜀"
-    mb = db.query_df("SELECT bid_key FROM my_bids WHERE my_rank IS NULL")
-    opened = set(db.query_df("SELECT o.bid_key FROM openings o JOIN my_bids m ON m.bid_key = o.bid_key "
-                             "WHERE o.participants > 0")["bid_key"])
-    found, checked, stopped = 0, 0, ""
-    for key in mb["bid_key"]:
-        if key not in opened:
+    found, checked, scanned, stopped = 0, 0, 0, ""
+    mb = db.query_df("SELECT m.bid_key, m.amount, m.rec_amount FROM my_bids m JOIN openings o ON o.bid_key = m.bid_key "
+                     "WHERE m.my_rank IS NULL AND o.participants > 0")
+    for r in mb.itertuples():
+        if str(r.bid_key).startswith("D2B"):
             continue
-        no, ord_ = key.rsplit("-", 1)
+        no, ord_ = r.bid_key.rsplit("-", 1)
         try:
-            collect_ranks(no, ord_)          # 전체 순위
+            ours = find_our_bid(no, ord_, biz)
         except api_client.QuotaError as e:
             stopped = str(e)
             break
         except api_client.ApiError:
             continue
-        mine = db.query_df("SELECT rank, amount FROM ranks WHERE bid_key = :k AND bizno = :b",
-                           {"k": key, "b": c["bizno"]})
-        rank = int(mine["rank"].iloc[0]) if len(mine) else 0
-        db.execute("UPDATE my_bids SET my_rank = :r, checked_at = :t WHERE bid_key = :k",
-                   {"r": rank, "t": db.now(), "k": key})
+        upd = {"r": int(ours["rank"]) if ours else 0, "t": db.now(), "k": r.bid_key}
+        if ours and ours["amount"]:
+            db.execute("UPDATE my_bids SET my_rank = :r, checked_at = :t, amount = :a, sajung = NULL, "
+                       "amount_source = '개찰순위(실제)', "
+                       "rec_amount = COALESCE(rec_amount, :old) WHERE bid_key = :k",
+                       {**upd, "a": ours["amount"], "old": r.amount})
+        else:
+            db.execute("UPDATE my_bids SET my_rank = :r, checked_at = :t WHERE bid_key = :k", upd)
         checked += 1
-        found += rank > 0
-    # 자동 발견: 개찰순위에 우리 회사가 있는데 기록이 없는 공고
-    auto = db.query_df(
-        """SELECT k.bid_key, k.rank, k.amount FROM ranks k
-           WHERE k.bizno = :b AND NOT EXISTS (SELECT 1 FROM my_bids m WHERE m.bid_key = k.bid_key)""",
-        {"b": c["bizno"]})
+        found += bool(ours)
+    # 기록하지 않은 공고도 찾기: 최근 4일 개찰된 우리 업종·참가 가능 공고
+    if not stopped:
+        try:
+            import analysis
+            df = analysis.load_dataset()
+            now = pd.Timestamp.now()
+            t = analysis.apply_filters(df[(df["open_date"] < now) & (df["open_date"] >= now - pd.Timedelta(days=4))
+                                          & (df["participants"] > 0)],
+                                       keywords=analysis.company_keywords(), eligible_only=True)
+            t = t[~t["bid_key"].astype(str).str.startswith("D2B")]
+            have = set(db.query_df("SELECT bid_key FROM my_bids")["bid_key"])
+            done = set(db.query_df("SELECT bid_no FROM limit_checks WHERE op = 'mine_scan'")["bid_no"])
+            for r in t[~t["bid_key"].isin(have) & ~t["bid_key"].isin(done)].head(scan_limit).itertuples():
+                try:
+                    ours = find_our_bid(r.bid_no, r.bid_ord, biz)
+                except api_client.QuotaError as e:
+                    stopped = str(e)
+                    break
+                except api_client.ApiError:
+                    continue
+                db.upsert_many("limit_checks", [{"bid_no": r.bid_key, "op": "mine_scan", "n": int(bool(ours)),
+                                                 "checked_at": db.now()}])
+                scanned += 1
+                if ours:
+                    db.upsert_many("my_bids", [{"bid_key": r.bid_key, "amount": ours["amount"], "sajung": None,
+                                                "memo": "개찰순위에서 자동 발견", "my_rank": int(ours["rank"]),
+                                                "checked_at": db.now(), "created_at": db.now(),
+                                                "rec_amount": None, "amount_source": "개찰순위(실제)"}])
+                    found += 1
+        except Exception as e:  # noqa: BLE001
+            stopped = stopped or f"자동 찾기 실패: {e}"
+    # 이미 받은 개찰순위(상위권)에 우리 회사가 있는데 기록이 없는 공고
+    rk = db.query_df("SELECT bid_key, rank, amount, bizno FROM ranks WHERE rank > 0 AND bizno IS NOT NULL AND bizno <> ''")
+    rk = rk[rk["bizno"].map(_biz) == biz]
+    have = set(db.query_df("SELECT bid_key FROM my_bids")["bid_key"])
+    auto = rk[~rk["bid_key"].isin(have)]
     if len(auto):
         db.upsert_many("my_bids", [{"bid_key": r.bid_key, "amount": r.amount, "sajung": None,
                                     "memo": "개찰순위에서 자동 발견", "my_rank": int(r.rank),
-                                    "checked_at": db.now(), "created_at": db.now()}
+                                    "checked_at": db.now(), "created_at": db.now(),
+                                    "rec_amount": None, "amount_source": "개찰순위(실제)"}
                                    for r in auto.itertuples()])
-    msg = f"결과 확인 {checked}건(순위 찾음 {found}) · 자동 발견 {len(auto)}건 {stopped}"
+    msg = (f"결과 확인 {checked}건(순위 찾음 {found}) · 개찰순위 훑기 {scanned}건 · 자동 발견 {len(auto)}건 "
+           f"{stopped}")
     db.log("우리 투찰", "-", checked + len(auto), msg)
     if progress:
         progress(msg)

@@ -330,10 +330,28 @@ def collect_results(d1: date, d2: date, progress=None, budget: int = MAX_DETAIL)
             db.execute("UPDATE bids SET lower_rate = :r WHERE bid_key = :k AND lower_rate IS NULL",
                        {"r": _num(det.get("scsbidLwltRt")), "k": key})
         _mark("d2b_result", key, len(bidders))
+        _record_ours(key, bidders)
         saved += 1
     if progress:
         progress(f"국방 개찰결과: 목록 {len(lst):,}건 · 우리 업종 저장 {saved}건")
     return len(lst), saved
+
+
+def _record_ours(key: str, bidders: list[dict]) -> None:
+    """참가업체 목록에 우리 회사가 있으면 '우리 투찰'에 실제 금액·순위로 기록."""
+    biz = str(db.company()["bizno"] or "").replace("-", "")
+    if not biz:
+        return
+    ours = next((b for b in bidders if str(b.get("bznsRgnb") or "").replace("-", "") == biz), None)
+    if not ours or not _num(ours.get("tbidAmnt")):
+        return
+    old = db.query_df("SELECT amount, memo, created_at FROM my_bids WHERE bid_key = :k", {"k": key})
+    db.upsert_many("my_bids", [{
+        "bid_key": key, "amount": _num(ours.get("tbidAmnt")), "sajung": None,
+        "memo": old["memo"].iloc[0] if len(old) else "국방 참가업체에서 자동 발견",
+        "my_rank": int(_num(ours.get("bidnRank")) or 0), "checked_at": db.now(),
+        "created_at": old["created_at"].iloc[0] if len(old) else db.now(),
+        "rec_amount": old["amount"].iloc[0] if len(old) else None, "amount_source": "개찰순위(실제)"}])
 
 
 def auto(progress=print, quick: bool = False) -> str:

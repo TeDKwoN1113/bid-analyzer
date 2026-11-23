@@ -264,6 +264,25 @@ def test_comparable_bids_prevent_high_bias(df):
     assert pick_old - base_pick > 0.15, (base_pick, pick_old)
 
 
+def test_our_actual_bid_found_from_ranks(df, monkeypatch):
+    """추천 금액으로 기록했어도, 개찰 후 개찰순위에서 우리 사업자번호의 실제 금액·순위로 바뀌어야 함."""
+    db.set_kv("company_bizno", "123-45-67890")
+    done = df[df["participants"] > 0].sort_values("open_date").iloc[-1]
+    key = done["bid_key"]
+    db.upsert_many("my_bids", [{"bid_key": key, "amount": 100.0, "sajung": 100.5, "memo": "", "my_rank": None,
+                                "checked_at": None, "created_at": "x", "rec_amount": 100.0,
+                                "amount_source": "추천 금액으로 기록"}])
+    items = [{"opengRank": str(i), "prcbdrBizno": f"9{i:09d}", "prcbdrNm": f"업체{i}", "bidprcAmt": str(1000 + i)}
+             for i in range(1, 200)]
+    items[149]["prcbdrBizno"] = "1234567890"          # 우리 회사 150위
+    monkeypatch.setattr(collector.api_client, "call_all", lambda op, params, max_pages=200: items)
+    collector.update_my_bids(scan_limit=0)
+    m = db.query_df("SELECT * FROM my_bids WHERE bid_key = :k", {"k": key}).iloc[0]
+    assert m["my_rank"] == 150 and m["amount"] == 1150 and m["rec_amount"] == 100
+    assert m["amount_source"] == "개찰순위(실제)" and pd.isna(m["sajung"])
+    db.execute("DELETE FROM my_bids WHERE bid_key = :k", {"k": key})
+
+
 def test_backtest_and_tune_rules(df):
     s, d = analysis.backtest(df, ["전기"], test_days=120, max_tests=20)
     assert not s.empty and set(s["방식"]) <= set(analysis.STRATEGIES.values())

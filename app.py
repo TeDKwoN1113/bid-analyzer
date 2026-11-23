@@ -431,7 +431,8 @@ if page == "🏠 오늘의 투찰":
                 if st.button("📝 이 금액으로 투찰 기록", key=f"save_{r['bid_key']}"):
                     db.upsert_many("my_bids", [{"bid_key": r["bid_key"], "amount": pk["투찰금액"],
                                                 "sajung": pk["사정율"], "memo": "오늘의 투찰에서 저장", "my_rank": None,
-                                                "checked_at": None, "created_at": db.now()}])
+                                                "checked_at": None, "created_at": db.now(),
+                                                "rec_amount": pk["투찰금액"], "amount_source": "추천 금액으로 기록"}])
                     st.rerun()
     if len(todo) > 40:
         st.caption(f"마감이 가까운 40건만 표시했습니다. 전체는 '📋 공고 현황'에서 보세요. (총 {len(todo)}건)")
@@ -614,7 +615,7 @@ elif page == "🧮 투찰 계산기":
         if st.button("📝 이 금액으로 투찰 기록 저장"):
             db.upsert_many("my_bids", [{"bid_key": row["bid_key"], "amount": analysis.bid_amount(base, my_s, lr, a_val),
                                         "sajung": my_s, "memo": memo, "my_rank": None, "checked_at": None,
-                                        "created_at": db.now()}])
+                                        "created_at": db.now(), "amount_source": "투찰 계산기에서 기록"}])
             st.success("저장했습니다. 개찰 후 결과가 자동으로 채워집니다. ('📝 우리 투찰' 메뉴)")
 
     win_chart(hist, my_s, rec)
@@ -644,7 +645,8 @@ elif page == "📝 우리 투찰":
             amount = amt_in or (analysis.bid_amount(r["base_amt"], s_in, r["lower_rate"], r["a_value"])
                                 if s_in and pd.notna(r["base_amt"]) and pd.notna(r["lower_rate"]) else None)
             db.upsert_many("my_bids", [{"bid_key": key, "amount": amount, "sajung": s_in or None, "memo": memo,
-                                        "my_rank": None, "checked_at": None, "created_at": db.now()}])
+                                        "my_rank": None, "checked_at": None, "created_at": db.now(),
+                                        "amount_source": "직접 입력"}])
             st.cache_data.clear()
             st.success("저장했습니다.")
 
@@ -661,17 +663,37 @@ elif page == "📝 우리 투찰":
     gap = (done["sajung"] - done["sajung_bid"]).mean() if len(done) else None
     c4.metric("우리 사정율 - 실제 사정율 (평균)", "-" if gap is None or pd.isna(gap) else f"{gap:+.3f}%p",
               help="+ 면 평균적으로 예정가격보다 높게(안전하게), - 면 낮게(하한 미달 위험) 넣고 있다는 뜻")
+    for c_ in ("rec_amount", "amount_source"):
+        if c_ not in v:
+            v[c_] = None
     show = v.sort_values("open_date", ascending=False)[
-        ["결과", "name", "org", "open_dt", "amount", "sajung", "sajung_bid", "winner_sajung", "my_rank",
-         "participants", "first_company", "memo", "bid_key"]].rename(columns={
-            "name": "공고명", "org": "기관", "open_dt": "개찰일시", "amount": "우리 금액", "sajung": "우리 사정율",
+        ["결과", "name", "org", "open_dt", "amount", "amount_source", "rec_amount", "sajung", "sajung_bid",
+         "winner_sajung", "my_rank", "participants", "first_company", "memo", "bid_key"]].rename(columns={
+            "name": "공고명", "org": "기관", "open_dt": "개찰일시", "amount": "우리 금액",
+            "amount_source": "금액 출처", "rec_amount": "추천 금액", "sajung": "우리 사정율",
             "sajung_bid": "실제 사정율", "winner_sajung": "1순위 사정율", "my_rank": "우리 순위",
             "participants": "참가수", "first_company": "1순위 업체", "memo": "메모", "bid_key": "공고번호"})
     st.dataframe(show, hide_index=True, use_container_width=True,
                  column_config={"우리 금액": st.column_config.NumberColumn(format="%d"),
+                                "추천 금액": st.column_config.NumberColumn(format="%d"),
                                 "우리 사정율": st.column_config.NumberColumn(format="%.3f"),
                                 "실제 사정율": st.column_config.NumberColumn(format="%.3f"),
                                 "1순위 사정율": st.column_config.NumberColumn(format="%.3f")})
+    st.caption("우리 금액: 개찰 후에는 개찰순위에서 사업자번호로 찾은 **실제 투찰금액**으로 자동으로 바뀝니다 "
+               "(금액 출처 '개찰순위(실제)'). 개찰 전이거나 못 찾았으면 기록한 금액입니다.")
+    with st.expander("✏️ 실제 투찰금액 고치기"):
+        opts_e = [f"{r.bid_key} | {r.name}" for r in v.sort_values("open_date", ascending=False).itertuples()]
+        pe = st.selectbox("공고", opts_e, key="edit_bid")
+        cur = v.set_index("bid_key").loc[pe.split(" | ")[0]]
+        new_amt = st.number_input("실제 투찰금액(원)", min_value=0.0, step=1.0, format="%.0f",
+                                  value=float(cur["amount"]) if pd.notna(cur["amount"]) else 0.0, key="edit_amt")
+        if st.button("금액 저장", key="edit_save") and new_amt > 0:
+            db.execute("UPDATE my_bids SET amount = :a, sajung = NULL, amount_source = '직접 수정', "
+                       "rec_amount = COALESCE(rec_amount, amount) WHERE bid_key = :k",
+                       {"a": new_amt, "k": pe.split(" | ")[0]})
+            st.cache_data.clear()
+            st.success("저장했습니다.")
+            st.rerun()
     st.caption("낙찰 조건: 실제 사정율 ≤ 우리 사정율 < 1순위 사정율. 우리 사정율이 실제 사정율보다 낮으면 하한 미달, "
                "1순위 사정율보다 높으면 다른 업체가 더 낮게 넣은 것입니다.")
     if len(done):
