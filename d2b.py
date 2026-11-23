@@ -29,8 +29,9 @@ WINDOW = 30               # 목록 조회 기간(일)
 NOTICE_DAYS = 45          # 매번 다시 보는 최근 공고 기간
 BACKFILL_DAYS = 365       # 결과(개찰) 과거 채우기
 # 하루 호출 한도(개발계정 약 1,000회)를 하루 여러 번 실행(새벽 전체 1 + 평일 낮 3)과 사이트 점검이 나눠 쓰도록
-BUDGET_FULL = {"notice": 120, "result": 90, "backfill": 150}   # 새벽 전체 수집 (상세 호출 수)
-BUDGET_QUICK = {"notice": 40, "result": 30, "backfill": 0}     # 낮 빠른 수집
+# 2026-11-23 운영계정 승인 → 상한 상향 (한도를 넘으면 '다음에 이어서'로 안전하게 멈춤)
+BUDGET_FULL = {"notice": 400, "result": 300, "backfill": 1500}  # 새벽 전체 수집 (상세 호출 수)
+BUDGET_QUICK = {"notice": 120, "result": 90, "backfill": 0}     # 낮 빠른 수집
 MAX_DETAIL = 120
 
 A_FIELDS = {"inanAmnt": "국민연금보험료", "inheAmnt": "국민건강보험료", "treaAmnt": "노인장기요양보험료",
@@ -376,7 +377,7 @@ def auto(progress=print, quick: bool = False) -> str:
             start = pd.Timestamp(back).date() if back else today - timedelta(days=31)
             oldest = today - timedelta(days=BACKFILL_DAYS)
             if start > oldest:
-                b1 = max(oldest, start - timedelta(days=30))
+                b1 = max(oldest, start - timedelta(days=90))
                 _, s3, complete = collect_results(b1, start, progress, budget=b["backfill"])
                 if complete:   # 이 기간을 다 끝냈을 때만 다음 기간으로 (못 끝낸 공고를 건너뛰지 않게)
                     db.set_kv("d2b_backfill_to", (b1 - timedelta(days=1)).isoformat())

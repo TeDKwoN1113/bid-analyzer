@@ -551,7 +551,7 @@ def find_our_bid(bid_no: str, bid_ord: str, bizno: str) -> dict | None:
     return ours
 
 
-def update_my_bids(progress=None, scan_limit: int = 80) -> str:
+def update_my_bids(progress=None, scan_limit: int = 200) -> str:
     """우리 회사 투찰 결과 채우기 (실제 투찰금액·순위는 개찰순위에서 사업자번호로 찾음).
 
     1) 기록한 공고가 개찰되면 개찰순위 전체에서 우리 줄을 찾아 '실제 금액'과 순위를 채움
