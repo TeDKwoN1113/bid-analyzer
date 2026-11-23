@@ -618,8 +618,30 @@ def _context(df: pd.DataFrame, keywords, region: str):
     return ctx
 
 
+COMPARABLE_RATIO = 0.3   # 예상 참가업체 수의 30% 이상이 들어온 공고만 비교 (경쟁 강도가 비슷한 공고끼리)
+
+
+def expected_participants(tier_list) -> float | None:
+    """가장 가까운 단계(같은 기관 → 지역 → 전국)에서 참가업체 수 중앙값."""
+    for _, h in reversed(tier_list):
+        p = h["participants"].dropna() if "participants" in h else pd.Series(dtype=float)
+        p = p[p > 0]
+        if len(p) >= 5:
+            return float(p.median())
+    return None
+
+
+def comparable(h: pd.DataFrame, expected: float | None, min_n: int = 20) -> pd.DataFrame:
+    """경쟁 강도가 비슷한 공고만. 참가업체가 적은 공고는 '이기는 구간'이 넓어서 섞으면 추천이 높아짐
+    (2026-11-23 첫 실전: 350곳 공고에 소액·소수참가 공고가 섞여 실제보다 0.3~0.7%p 높게 추천된 원인)."""
+    if expected is None or expected < 30 or "participants" not in h:
+        return h
+    c = h[h["participants"] >= expected * COMPARABLE_RATIO]
+    return c if n_windows(c) >= min(min_n, max(n_windows(h), 1)) else h
+
+
 def tiers(df: pd.DataFrame, row, keywords=None) -> list[tuple[str, pd.DataFrame]]:
-    """비교 단계: [전국, (우리 지역), (같은 기관)] — 넓은 것부터."""
+    """비교 단계: [전국, (우리 지역), (같은 기관)] — 넓은 것부터. 모두 참가업체 수가 비슷한 공고만."""
     region = db.company()["region"]
     ctx = _context(df, keywords, region)
     ind = ctx["ind"]
@@ -631,7 +653,9 @@ def tiers(df: pd.DataFrame, row, keywords=None) -> list[tuple[str, pd.DataFrame]
     org = ctx["by_org"].get(row["org"], ind.iloc[0:0])
     if n_windows(org) >= 5:
         out.append((f"같은 기관({row['org']})", org))
-    return out
+    exp = expected_participants(out)
+    out = [(name, comparable(h, exp, 5 if name.startswith("같은 기관") else 20)) for name, h in out]
+    return [t for i, t in enumerate(out) if i == 0 or n_windows(t[1]) >= 5]
 
 
 def blend(tier_list) -> tuple[pd.DataFrame, list[float]]:

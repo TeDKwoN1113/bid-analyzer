@@ -236,6 +236,34 @@ def test_d2b_mapping_and_flow(df, monkeypatch):
     assert len(tb["ranks"]) == 2
 
 
+def test_comparable_bids_prevent_high_bias(df):
+    """소수 참가 공고(이기는 구간이 넓음)가 섞여도 많이 들어오는 공고의 추천이 위로 끌려가지 않아야 함."""
+    r = upcoming(df).iloc[0]
+    kw = analysis.bid_keywords(r)
+    base_pick = analysis.pick_bid(df, r, kw)["사정율"]
+    done = df[df["sajung"].notna()]
+    fake = done.sample(int(len(done) * 0.15), replace=True, random_state=1).copy()   # 실제처럼 일부만
+    fake["bid_key"] = [f"FAKE{i}-000" for i in range(len(fake))]
+    fake["bid_no"] = [f"FAKE{i}" for i in range(len(fake))]
+    fake["participants"] = 5
+    fake["sajung"] = 99.6
+    fake["winner_sajung"] = 101.8      # 넓은 낙찰 구간 → 높은 사정율 쪽 확률을 부풀림
+    biased = pd.concat([df, fake], ignore_index=True)
+    analysis._ctx_cache.clear()
+    pick2 = analysis.pick_bid(biased, r, kw)["사정율"]
+    assert abs(pick2 - base_pick) < 0.15, (base_pick, pick2)
+    # 예전 방식(참가업체 수 구분 없음)이었다면 위로 끌려갔는지 확인 → 이 테스트가 실제 문제를 잡는지 검증
+    old = analysis.COMPARABLE_RATIO
+    analysis.COMPARABLE_RATIO = 0
+    analysis._ctx_cache.clear()
+    try:
+        pick_old = analysis.pick_bid(biased, r, kw)["사정율"]
+    finally:
+        analysis.COMPARABLE_RATIO = old
+        analysis._ctx_cache.clear()
+    assert pick_old - base_pick > 0.15, (base_pick, pick_old)
+
+
 def test_backtest_and_tune_rules(df):
     s, d = analysis.backtest(df, ["전기"], test_days=120, max_tests=20)
     assert not s.empty and set(s["방식"]) <= set(analysis.STRATEGIES.values())
