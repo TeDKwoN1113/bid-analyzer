@@ -221,6 +221,15 @@ def test_d2b_mapping_and_flow(df, monkeypatch):
     k = "D2B9001_202618396-000"
     assert k in d.index and d.at[k, "allowed_regions"] == "울산광역시" and d.at[k, "a_value"] == 3800000
     assert analysis.eligible(d.loc[[k]]).iloc[0]
+    # 10억 미만인데 지역제한 목록이 비어 있으면 '제한없음'이 아니라 공사 위치로 판단
+    db.execute("DELETE FROM regions WHERE bid_key = :k", {"k": k})
+    db.execute("UPDATE bids SET region = '경기도 포천시', org = '육군 OO사단' WHERE bid_key = :k", {"k": k})
+    d3 = analysis.load_dataset().set_index("bid_key")
+    assert not d3.at[k, "allowed_regions_known"] and not analysis.eligible(d3.loc[[k]]).iloc[0]
+    db.execute("UPDATE bids SET region = '울산광역시 북구' WHERE bid_key = :k", {"k": k})
+    d4 = analysis.load_dataset().set_index("bid_key")
+    assert analysis.eligible(d4.loc[[k]]).iloc[0]
+    db.upsert_many("regions", [{"bid_key": k, "region": "울산광역시"}])
     pk = analysis.pick_bid(df, d.loc[k], analysis.bid_keywords(d.loc[k]))
     assert pk and pk["투찰금액"] > 0
     # 결과: 선택된 복수예비가격 평균 = 예정가격, 1순위·낙찰자

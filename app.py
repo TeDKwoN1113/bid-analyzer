@@ -1311,6 +1311,27 @@ elif page == "⚙️ 설정 · API 점검":
                         st.json(items_[0])
                 except Exception as e:  # noqa: BLE001
                     st.error(f"{op_}: {e}")
+        if st.button("10억 미만 국방 공고 상세 1건 보기 (지역제한 확인용)"):
+            import d2b
+            try:
+                lst_, _ = d2b.call(d2b.BID, "getFcltyCmpetBidPblancList",
+                                   {"anmtDateBegin": d2b._d(date.today() - timedelta(days=14)),
+                                    "anmtDateEnd": d2b._d(date.today())}, rows=100)
+                small = [x for x in lst_ if "공사" in str(x.get("busiDivs", "공사"))
+                         and (d2b._num(x.get("baseAmnt")) or 0) < 1.1e9]
+                if not small:
+                    st.info("최근 14일 10억 미만 국방 공사 공고가 없습니다.")
+                else:
+                    x = small[0]
+                    p_ = {k: x.get(k) for k in ("pblancYear", "pblancSeCode", "pblancNo", "pblancOdr", "cntrwkNo", "orntCode")}
+                    det_ = (d2b.call(d2b.BID, "getFcltyCmpetBidPblancDetail", p_)[0] or [{}])[0]
+                    st.write(f"**{x.get('cntrwkNm')}** · 기초 {d2b._num(x.get('baseAmnt')) or 0:,.0f}원")
+                    st.write({k: det_.get(k) for k in ("areaLmttList", "lcnsLmttList", "lc", "estmPrce", "cntrctMth",
+                                                       "scsbidLwltRt", "bidPartcptReqstClosDt")})
+                    with st.expander("상세 전체"):
+                        st.json(det_)
+            except Exception as e:  # noqa: BLE001
+                st.error(str(e))
         if st.button("국방 최근 30일 지금 수집"):
             import d2b
             with st.spinner("수집 중…"):

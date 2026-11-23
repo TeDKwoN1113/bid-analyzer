@@ -128,6 +128,12 @@ def _build_dataset() -> pd.DataFrame:
         checked = set(chk.loc[chk["op"] == table, "bid_no"])
         df[out + "_known"] = df["notice_dt"].astype(str).str[:10].isin(days) | (df[out] != "") | \
             df["bid_no"].isin(checked)
+    # 국방(D2B) 공고: 추정가격 10억 미만은 지역제한이 원칙 → 제한 목록이 비어 있으면 '제한없음'으로 보지 않고
+    # 공사 위치(지역)로 판단하게 함 (10억 이상은 전국)
+    est_or_base = df["est_price"].fillna(df["base_amt_notice"] / 1.1)
+    d2b_small = df["bid_key"].astype(str).str.startswith("D2B") & (df["allowed_regions"] == "") & \
+        (est_or_base.isna() | (est_or_base < D2B_NATIONWIDE_FROM))
+    df.loc[d2b_small, "allowed_regions_known"] = False
     df["base_amt"] = df["base_amt_open"].fillna(df["base_amt_notice"])
     # 예정가격: 예비가격 상세(정확) → 없으면 낙찰률·1순위 투찰률로 역산 (금액 ÷ 예정가격 대비 비율, 소수 3자리라 오차 ±0.001%p 미만)
     df["plan_price"] = pd.to_numeric(df["plan_price"], errors="coerce").astype(float)
@@ -185,6 +191,9 @@ def _latest_order(df: pd.DataFrame) -> pd.DataFrame:
     kind = df["ntce_kind"].fillna("") if "ntce_kind" in df else pd.Series("", index=df.index)
     df = df[~kind.str.contains("취소", regex=False)]
     return df.drop(columns="_ord").reset_index(drop=True)
+
+
+D2B_NATIONWIDE_FROM = 1_000_000_000   # 국방 공고는 추정가격 10억 이상만 전국, 미만은 지역제한
 
 
 def is_d2b(key) -> bool:
