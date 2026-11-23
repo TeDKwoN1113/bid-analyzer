@@ -802,7 +802,9 @@ elif page == "🔌 한전 입찰":
         local_only = not scope_k.startswith("전체")
         kw_extra = st.text_input("공고명 키워드 (쉼표 구분, 비우면 전기·배전·송전 등 기본)", "")
         kws = [x.strip() for x in kw_extra.split(",") if x.strip()] or None
-        kb = kepco.filter_bids(kb_all, region=reg, keywords=kws, local_only=local_only,
+        kind_k = st.radio("구분", ["전체", "공사", "용역"], horizontal=True, key="kepco_kind",
+                          help="용역은 ⚙️ 설정의 '한전 용역 키워드'(기본: 광학카메라·간이 PD·콘크리트전주 내부진단)에 맞는 것만")
+        kb = kepco.filter_bids(kb_all, region=reg, keywords=kws, local_only=local_only, kind=kepco.KINDS[kind_k],
                                include_national=scope_k.startswith("참가"))
         now = pd.Timestamp.now()
         dl = kb["end_dt"].fillna(kb["attend_close_dt"])
@@ -887,7 +889,10 @@ elif page == "🔌 한전 입찰":
             if base_k > 0:
                 st.metric("💰 투찰금액", f"{analysis.bid_amount(base_k, s_k, lr_k, a_k):,}원")
             if rec:
-                st.caption(f"추천 사정율 {rec['사정율']:.2f}% — 기록된 한전 개찰 결과 {rec['n']}건 기준 과거 낙찰확률 {rec['낙찰확률']:.1f}%")
+                st.caption(f"참고 사정율 {rec['사정율']:.2f}% — 기록된 한전 개찰 결과 {rec['n']}건 기준 과거 낙찰확률 {rec['낙찰확률']:.1f}%")
+                st.warning("⚠️ 한전 용역은 우리 투찰 이력 260건으로 공정하게 시험했을 때, 이 방식(과거에 가장 많이 이긴 사정율)이 "
+                           "무작위보다 낫지 않았습니다. 참고용으로만 보세요. (참가 250곳 안팎·낙찰 구간 폭 0.02%p 수준이라 "
+                           "사정율 맞히기보다 경쟁사 투찰 분포를 피하는 방식이 필요 — 개찰결과(업체별 금액)가 쌓이면 다음 단계로 진행)")
             else:
                 st.caption("한전 개찰 결과가 10건 이상 기록되면 추천 사정율이 나옵니다. 그 전에는 사정율을 직접 정하세요.")
 
@@ -929,7 +934,8 @@ elif page == "🔌 한전 입찰":
                        "여러 화면이면 나눠서 여러 번 해도 됩니다.")
             pasted = st.text_area("여기에 붙여넣기", height=160, key="srm_paste")
         else:
-            up = st.file_uploader("엑셀(xlsx·xls) 또는 CSV 파일", type=["xlsx", "xls", "csv"], key="srm_up")
+            up = st.file_uploader("엑셀(xlsx·xls) 또는 CSV 파일 — 모두부드 '투찰 이력' 엑셀도 그대로 올리면 됩니다",
+                                  type=["xlsx", "xls", "csv"], key="srm_up", accept_multiple_files=False)
         if up is not None or pasted.strip():
             try:
                 import io as _io
@@ -937,10 +943,8 @@ elif page == "🔌 한전 입찰":
                     txt = pasted.strip()
                     sep = "\t" if "\t" in txt else ("," if txt.count(",") > txt.count("  ") else r"\s{2,}")
                     raw_up = pd.read_csv(_io.StringIO(txt), sep=sep, engine="python", dtype=str)
-                elif up.name.lower().endswith(".csv"):
-                    raw_up = pd.read_csv(up, encoding_errors="ignore")
                 else:
-                    raw_up = pd.read_excel(up)
+                    raw_up = kepco.read_table_file(up, up.name)
                 # 제목 줄이 위에 몇 줄 있는 양식 대비: '공고번호'가 들어 있는 줄을 칸 이름으로
                 if not any("공고" in str(c) or "번호" in str(c) for c in raw_up.columns):
                     for i in range(min(10, len(raw_up))):
@@ -1265,7 +1269,11 @@ elif page == "⚙️ 설정 · API 점검":
     cperf = ca2.checkbox("실적제한 공고도 참가 가능으로 보기 (해당 실적이 있을 때만)",
                          value=db.get_kv("allow_perf_limit", "0") == "1",
                          help="끄면 실적경쟁·'실적 및 기술자 보유' 공고는 참가 가능 목록과 알림에서 뺍니다.")
+    import kepco as _kp
+    ksv = st.text_input("한전 용역 키워드 (쉼표 구분 — 이 단어가 공고명에 있는 한전 용역만 알림·분석)",
+                        ", ".join(_kp.service_keywords()))
     if st.button("회사 정보 저장"):
+        db.set_kv("kepco_service_keywords", ksv.strip())
         db.set_kv("company_ability", f"{cabil:.0f}" if cabil else "")
         db.set_kv("allow_perf_limit", "1" if cperf else "0")
         db.set_kv("qual_max_est", qlim.strip())

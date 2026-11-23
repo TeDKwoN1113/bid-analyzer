@@ -33,6 +33,16 @@ BID_TYPES = {"LimitedLowestPrice": "제한적최저가", "LowestPrice": "최저�
              "CollectivelyBid": "일괄입찰", "Nego": "협상", "TotalEvalSuccess": "종합심사낙찰제"}
 
 KEYWORDS = ["전기", "배전", "송전", "변전", "지중", "가공", "전력", "케이블", "조명", "태양광", "계량"]
+# 우리 회사가 실제로 넣어 온 한전 용역 (2026-11 투찰 이력 322건 분석: 85%가 진단 용역)
+# 사용자 확인(2026-11-23): 광학카메라 진단용역 · 간이 PD 진단용역 · 콘크리트전주 내부진단(내부철근) 용역
+SERVICE_KEYWORDS = ["광학", "PD", "콘크리트전주", "콘크리트 전주", "내부진단", "내부철근"]
+
+
+def service_keywords() -> list[str]:
+    """설정에서 바꿀 수 있음 (kv: kepco_service_keywords, 쉼표 구분)."""
+    v = db.get_kv("kepco_service_keywords")
+    return [x.strip() for x in v.split(",") if x.strip()] if v else SERVICE_KEYWORDS
+KINDS = {"전체": None, "공사": "공사", "용역": "용역"}
 
 
 class KepcoError(Exception):
@@ -230,6 +240,8 @@ def _prepare(df: pd.DataFrame) -> pd.DataFrame:
         implied = (df["r_first"] - a) / (df["r_lr"] / 100) + a
         df["winner_sajung"] = (implied / df["base_amt"] * 100).where(df["r_first"].notna() & df["r_lr"].notna())
         df["participants"] = df["r_part"]
+        for c_ in ("sajung", "winner_sajung", "participants"):
+            df[c_] = pd.to_numeric(df[c_], errors="coerce").astype(float)
         df.loc[~df["winner_sajung"].between(90, 110), "winner_sajung"] = np.nan
         df.loc[~df["sajung"].between(90, 110), "sajung"] = np.nan
     return df
@@ -239,15 +251,18 @@ def _prepare(df: pd.DataFrame) -> pd.DataFrame:
 # 엑셀 칸 이름 추측용 (SRM 내려받기 양식이 바뀌어도 사용자가 화면에서 고를 수 있음)
 IMPORT_FIELDS = {
     "bid_no": ("공고번호", ["공고번호", "입찰번호", "공고 번호", "bid"]),
+    "org": ("발주처(선택)", ["발주처", "발주기관", "회사이름"]),
+    "category": ("업종/품명(선택, 공사·용역 구분)", ["업종/품명", "업종", "구분"]),
     "name": ("공고명(선택)", ["공고명", "입찰건명", "건명", "공사명"]),
-    "base_amt": ("기초금액/예비가격기초금액(선택)", ["예비가격기초", "기초금액", "기초"]),
-    "plan_price": ("예정가격", ["예정가격", "예가"]),
-    "first_amt": ("1순위(낙찰) 금액", ["1순위", "낙찰금액", "최저", "낙찰가"]),
+    "base_amt": ("기초금액/예비가격기초금액(선택)", ["예비가격기초", "기초금액"]),
+    "plan_price": ("예정가격", ["예정가격"]),
+    "first_amt": ("1순위(낙찰) 금액", ["1순위투찰금액", "1순위금액", "1순위 금액", "낙찰금액", "낙찰가", "1순위"]),
     "lower_rate": ("낙찰하한율(선택)", ["하한율", "하한"]),
     "participants": ("참가업체 수(선택)", ["참가업체", "참가수", "업체수", "투찰업체"]),
-    "our_amount": ("우리 투찰금액(선택)", ["투찰금액", "우리", "당사", "입찰금액"]),
-    "our_rank": ("우리 순위(선택)", ["순위"]),
-    "open_dt": ("개찰일(선택)", ["개찰일", "개찰일시", "개찰"]),
+    "our_amount": ("우리 투찰금액(선택)", ["자사투찰금액", "투찰금액", "우리", "당사", "입찰금액"]),
+    "our_sajung": ("우리 사정율(선택, 하한율·A값 계산용)", ["자사사정율(100%)", "자사사정율"]),
+    "our_rank": ("우리 순위(선택)", ["자사순위", "순위"]),
+    "open_dt": ("개찰일(선택)", ["실개찰일시", "개찰일시", "개찰일", "개찰"]),
 }
 
 
@@ -264,19 +279,42 @@ def guess_columns(cols) -> dict:
     return out
 
 
+LR_CANDIDATES = [89.745, 88.745, 87.745, 86.745, 85.495, 84.245, 90.25, 89.995, 87.995]
+COMPANY_CODES = {"한국전력공사": "COM01", "한국서부발전": "COM02", "한국남부발전": "COM04", "한국중부발전": "COM05",
+                 "한국남동발전": "COM06", "한국동서발전": "COM08", "한국전력기술": "COM09", "한전KPS": "COM10"}
+
+
+def infer_rate_and_a(base, our_amt, our_sj):
+    """우리 투찰금액 = (기초금액×우리사정율 − A)×하한율 + A 에서 하한율·A값 역산.
+    표준 하한율 중 A값이 0~기초금액 10% 사이가 되는 것 (가장 작은 A). (모두부드 화면의 낙찰하한가와 원 단위까지 일치 확인)"""
+    if not all(x is not None and pd.notna(x) and x > 0 for x in (base, our_amt, our_sj)):
+        return None, None
+    best = None
+    for lr in LR_CANDIDATES:
+        l_ = lr / 100
+        a = (our_amt - l_ * base * our_sj / 100) / (1 - l_)
+        if -0.002 * base <= a <= 0.10 * base and (best is None or a < best[1]):
+            best = (lr, max(a, 0.0))
+    return best if best else (None, None)
+
+
 def import_results(df_in: pd.DataFrame, mapping: dict, default_lr: float = 87.745) -> tuple[int, int]:
-    """SRM 이력(엑셀) → kepco_results 저장. 공고가 한전 공고 목록에 없으면 최소 정보로 추가. (저장 건수, 건너뛴 건수)"""
+    """투찰 이력(엑셀: SRM·모두부드 등) → kepco_results 저장. 공고가 한전 공고 목록에 없으면 최소 정보로 추가.
+    (저장 건수, 건너뛴 건수)"""
+    import re as _re
+
     def col(k):
         c = mapping.get(k)
         return df_in[c] if c in df_in else pd.Series([None] * len(df_in), index=df_in.index)
 
     def nums(x):
         return pd.to_numeric(x.astype(str).str.replace(r"[^\d.\-]", "", regex=True), errors="coerce")
-    no = col("bid_no").astype(str).str.strip()
+    # 공고번호: 'E012603569-01' 처럼 차수가 붙어 있으면 떼서 한전 API 번호와 맞춤
+    no = col("bid_no").astype(str).str.strip().str.replace(r"^([A-Z]\d{9,})-\d{1,3}$", r"\1", regex=True)
     plan, first = nums(col("plan_price")), nums(col("first_amt"))
-    base, lr = nums(col("base_amt")), nums(col("lower_rate")).fillna(default_lr)
-    part, ours, rank = nums(col("participants")), nums(col("our_amount")), nums(col("our_rank"))
-    name = col("name")
+    base, lr_in = nums(col("base_amt")), nums(col("lower_rate"))
+    part, ours, rank, our_sj = nums(col("participants")), nums(col("our_amount")), nums(col("our_rank")), nums(col("our_sajung"))
+    name, org, cat = col("name"), col("org"), col("category").astype(str)
     opened = pd.to_datetime(col("open_dt"), errors="coerce", format="mixed")
     have = set(db.query_df("SELECT bid_no FROM kepco_bids")["bid_no"])
     res, bids, skipped = [], [], 0
@@ -285,25 +323,44 @@ def import_results(df_in: pd.DataFrame, mapping: dict, default_lr: float = 87.74
         if not b or b.lower() in ("nan", "none") or pd.isna(plan[i]) or plan[i] <= 0:
             skipped += 1
             continue
+        lr, a_val = (float(lr_in[i]), 0.0) if pd.notna(lr_in[i]) else infer_rate_and_a(base[i], ours[i], our_sj[i])
         res.append({"bid_no": b, "plan_price": float(plan[i]),
                     "first_amt": None if pd.isna(first[i]) else float(first[i]),
-                    "lower_rate": float(lr[i]), "a_value": 0.0,
+                    "lower_rate": float(lr or default_lr), "a_value": float(a_val or 0.0),
                     "participants": None if pd.isna(part[i]) else int(part[i]),
                     "our_amount": None if pd.isna(ours[i]) else float(ours[i]),
-                    "our_rank": None if pd.isna(rank[i]) else int(rank[i]),
-                    "memo": "SRM 이력 불러오기", "created_at": db.now()})
+                    "our_rank": None if pd.isna(rank[i]) else int(rank[i]),   # 음수 = 하한 미달
+                    "memo": "투찰 이력 불러오기", "created_at": db.now()})
         if b not in have:
-            bids.append({"bid_no": b, "company": "COM01", "name": None if pd.isna(name[i]) else str(name[i]),
-                         "item_type": "Construction", "purchase_type": "ConstructionService",
+            nm = None if pd.isna(name[i]) else str(name[i])
+            service = bool(nm and "용역" in nm) or bool(_re.search("엔지니어링|기술사|용역", str(cat[i])))
+            bids.append({"bid_no": b, "company": COMPANY_CODES.get(str(org[i]).replace("(주)", "").strip(), "COM01"),
+                         "name": nm, "item_type": "Service" if service else "Construction",
+                         "purchase_type": "ConstructionService",
                          "base_amt": None if pd.isna(base[i]) else float(base[i]),
                          "end_dt": None if pd.isna(opened[i]) else opened[i].strftime("%Y-%m-%d %H:%M:%S"),
                          "progress": "Final", "updated_at": db.now()})
+            have.add(b)
         elif not pd.isna(base[i]):
             db.execute("UPDATE kepco_bids SET base_amt = :a WHERE bid_no = :n AND base_amt IS NULL",
                        {"a": float(base[i]), "n": b})
     db.upsert_many("kepco_bids", bids)
     db.upsert_many("kepco_results", res)
     return len(res), skipped
+
+
+def read_table_file(f, name: str) -> pd.DataFrame:
+    """엑셀(xlsx·xls)·CSV 읽기. 모두부드 등에서 받은 xls 는 파일 구조가 조금 깨져 있어도 읽음."""
+    low = name.lower()
+    if low.endswith(".csv"):
+        return pd.read_csv(f, encoding_errors="ignore")
+    if low.endswith(".xls"):
+        try:
+            return pd.read_excel(f, engine="xlrd", engine_kwargs={"ignore_workbook_corruption": True})
+        except Exception:  # noqa: BLE001  (진짜 xls 가 아니라 HTML 표인 경우)
+            f.seek(0)
+            return pd.read_html(f)[0]
+    return pd.read_excel(f)
 
 
 def parse_result_text(text: str) -> dict:
@@ -393,6 +450,11 @@ def recommend(df: pd.DataFrame, row, region: str | None = None) -> dict | None:
     """기록된 한전 개찰 결과로 사정율별 낙찰확률을 계산해 추천 (나라장터와 같은 방식). 10건 미만이면 None."""
     import analysis
     hist = df[df["sajung"].notna() & df["winner_sajung"].notna()]
+    if row is not None and len(hist):
+        # 공사는 공사끼리, 용역은 용역끼리 (참가 업체 수·하한율이 달라서 섞으면 안 됨)
+        same = is_service(hist) == bool(is_service(pd.DataFrame([row])).iloc[0])
+        if same.sum() >= 10:
+            hist = hist[same]
     if row is not None and row.get("place") and (hist["place"] == row["place"]).sum() >= 30:
         hist = hist[hist["place"] == row["place"]]
     if analysis.n_windows(hist) < 10:
@@ -442,20 +504,37 @@ def region_scope(df: pd.DataFrame, region: str) -> pd.Series:
     return pd.Series(np.where(mine, "local", np.where(other, "other", "national")), index=df.index)
 
 
+def is_service(df: pd.DataFrame) -> pd.Series:
+    name = df["name"].fillna("")
+    return name.str.contains("용역") | (df["item_type"].fillna("") == "Service")
+
+
 def filter_bids(df: pd.DataFrame, region: str | None = None, keywords=None, local_only: bool = False,
-                include_national: bool = True) -> pd.DataFrame:
-    """공사 + 업종 키워드 (+ 참가 가능 지역: 우리 지역 공고, 그리고 지역 제한 없는 전국 공고)."""
+                include_national: bool = True, kind: str | None = None) -> pd.DataFrame:
+    """업종 키워드에 맞는 공사·용역 (+ 참가 가능 지역: 우리 지역 공고, 그리고 지역 제한 없는 전국 공고).
+    kind: None=공사+용역, '공사', '용역'."""
     if df.empty:
         return df
-    m = is_construction(df)
-    kw = keywords or KEYWORDS
-    m &= df["name"].fillna("").str.contains("|".join(map(re.escape, kw)), regex=True)
+    name = df["name"].fillna("")
+    cons, serv = is_construction(df), is_service(df)
+    if keywords:
+        hit = name.str.contains("|".join(map(re.escape, keywords)), regex=True)
+        m = (cons | serv) & hit
+    else:
+        m = (cons & name.str.contains("|".join(map(re.escape, KEYWORDS)), regex=True)) | \
+            (serv & name.str.contains("|".join(map(re.escape, service_keywords())), regex=True))
+    if kind == "공사":
+        m &= cons
+    elif kind == "용역":
+        m &= serv
     if local_only and region:
         sc = region_scope(df, region)
         m &= (sc == "local") | ((sc == "national") & include_national)
     out = df[m]
-    if region and len(out):
-        out = out.assign(지역=region_scope(out, region).map({"local": region, "national": "전국", "other": "타지역"}))
+    if len(out):
+        out = out.assign(구분=np.where(is_service(out), "용역", "공사"))
+        if region:
+            out = out.assign(지역=region_scope(out, region).map({"local": region, "national": "전국", "other": "타지역"}))
     return out
 
 

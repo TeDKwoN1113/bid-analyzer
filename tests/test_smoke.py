@@ -337,6 +337,29 @@ def test_limit_reasons_exclude_unenterable_bids():
     db.set_kv("allow_perf_limit", "0")
 
 
+def test_modoobid_history_import():
+    """모두부드 투찰 이력 엑셀 형식: 칸 추측, 공고번호 차수 떼기, 하한율·A값 역산(화면 낙찰하한가와 일치)."""
+    import kepco
+    x = pd.DataFrame({"번호": [1, 2], "공고명": ["'27년 부산울산본부 울산지사 저압 협력회사 C지역 공사", "2026년 평창지사 콘크리트전주 내부진단용역"],
+                      "발주처": ["한국전력공사"] * 2, "공고번호": ["E012607755-01", "E012603540-01"], "지역": ["울산", "전국"],
+                      "업종/품명": ["전기", "기술사사무소/엔지니어링(설비)"], "예정가격": [85247039, 47852486],
+                      "기초금액": [84093067, 47943296], "예가/기초(100%)": [101.3723, 99.8106],
+                      "자사사정율(100%)": [100.1329, 100.2452], "자사순위": ["-65위", "67위"], "업체수": [174, 183],
+                      "자사투찰금액": [75249956, 42171016], "1순위 업체명": ["대성이텍", "(주)오성이엠"],
+                      "1순위투찰금액": [76327440, 41989600], "실개찰일시": ["2026-11-11 18:14:00", "2026-05-15 15:16:28"]})
+    mp = kepco.guess_columns(list(x.columns))
+    assert mp["first_amt"] == "1순위투찰금액" and mp["our_amount"] == "자사투찰금액" and mp["our_rank"] == "자사순위"
+    assert mp["plan_price"] == "예정가격" and mp["base_amt"] == "기초금액"
+    lr, a = kepco.infer_rate_and_a(84093067, 75249956, 100.1329)
+    assert lr == 88.745 and abs(round((85247039 - a) * lr / 100 + a) - 76174867) <= 2   # 화면의 낙찰하한가
+    assert kepco.infer_rate_and_a(47943296, 42171016, 100.2452)[0] == 87.745
+    n, sk = kepco.import_results(x, mp)
+    kb = kepco.load().set_index("bid_no")
+    assert n == 2 and "E012607755" in kb.index and kb.at["E012603540", "item_type"] == "Service"
+    assert kb.at["E012603540", "winner_sajung"] > kb.at["E012603540", "sajung"]
+    assert len(kepco.filter_bids(kb.reset_index(), kind="용역")) >= 1
+
+
 def test_backtest_and_tune_rules(df):
     s, d = analysis.backtest(df, ["전기"], test_days=120, max_tests=20)
     assert not s.empty and set(s["방식"]) <= set(analysis.STRATEGIES.values())
