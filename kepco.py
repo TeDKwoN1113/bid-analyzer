@@ -336,6 +336,28 @@ def parse_result_text(text: str) -> dict:
     return out
 
 
+def parse_many(text: str) -> list[dict]:
+    """여러 개찰결과 화면을 이어 붙인 글 → 공고별로 나눠서 읽기 (공고번호가 나올 때마다 새 공고)."""
+    import re
+    starts = [m.start() for m in re.finditer(r"입찰공고\s*개찰결과|공고번호[\s:]*[A-Z]\d{9,}", text)]
+    # '입찰공고 개찰결과' 제목과 바로 뒤 '공고번호'가 같은 공고면 하나로
+    cuts, last = [], -10_000
+    for st_ in starts:
+        if st_ - last > 300:
+            cuts.append(st_)
+        last = st_
+    if not cuts:
+        cuts = [0]
+    chunks = [text[a:b] for a, b in zip(cuts, cuts[1:] + [len(text)])]
+    out, seen = [], set()
+    for c in chunks:
+        p = parse_result_text(c)
+        if p["bid_no"] and p["plan_price"] and p["bid_no"] not in seen:
+            out.append(p)
+            seen.add(p["bid_no"])
+    return out
+
+
 def save_parsed_result(p: dict, bizno: str = "") -> str:
     """읽은 개찰결과를 저장 (kepco_results + 업체별 순위는 ranks 에 'KEPCO-공고번호'로)."""
     if not p.get("bid_no") or not p.get("plan_price"):

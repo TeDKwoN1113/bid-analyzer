@@ -202,6 +202,8 @@ def test_kepco_mapping_and_stats(df):
     pr = kepco.parse_result_text(txt)
     assert pr["bid_no"] == bno and pr["plan_price"] == 102160664 and pr["lower_rate"] == 89.745
     assert [b["rank"] for b in pr["bidders"]] == [1, 2] and len(pr["below"]) == 1
+    two = kepco.parse_many(txt + "\n\n" + txt.replace(bno, "E099999999").replace("102,160,664", "200,000,000"))
+    assert [x["bid_no"] for x in two] == [bno, "E099999999"] and two[1]["plan_price"] == 200000000
     msg = kepco.save_parsed_result(pr, "1234567890")
     assert "참가 3곳" in msg and "우리 90,000,000원" in msg
     one2 = kepco.load().set_index("bid_no").loc[bno]
