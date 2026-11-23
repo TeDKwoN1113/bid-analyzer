@@ -49,6 +49,18 @@ from config import OPERATIONS, SAMPLE_DB_PATH, load_settings, save_settings  # n
 
 st.set_page_config(page_title="입찰 분석기", page_icon="⚡", layout="wide")
 
+# 브라우저 자동 번역(크롬 '한국어로 번역' 등)이 화면 글자를 바꾸면 Streamlit 이
+# "removeChild ... 자식이 아닙니다" 오류로 멈춤 → 이 사이트는 번역하지 않도록 표시
+import streamlit.components.v1 as _components  # noqa: E402
+_components.html("""<script>
+try { const d = window.parent.document;
+      d.documentElement.setAttribute('translate', 'no');
+      d.documentElement.classList.add('notranslate');
+      if (!d.querySelector('meta[name="google"]')) {
+        const m = d.createElement('meta'); m.name = 'google'; m.content = 'notranslate'; d.head.appendChild(m); }
+} catch (e) {}
+</script>""", height=0)
+
 settings = load_settings()
 
 # ---------------- 로그인 (외부 접속 시 필수) ----------------
