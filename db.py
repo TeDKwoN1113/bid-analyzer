@@ -228,6 +228,24 @@ def query_df(sql: str, params: dict | None = None) -> pd.DataFrame:
     return df
 
 
+def query_df_big(sql: str, params: dict | None = None, chunk: int = 20000) -> pd.DataFrame:
+    """큰 표를 나눠 받아서 합침 — 한꺼번에 받을 때보다 메모리를 훨씬 덜 씀 (무료 사이트 서버 메모리 한도)."""
+    if engine().dialect.name == "sqlite":
+        return query_df(sql, params)
+    parts = []
+    with engine().connect().execution_options(stream_results=True) as c:
+        for part in pd.read_sql_query(text(sql), c, params=params or {}, chunksize=chunk):
+            parts.append(part)
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    del parts
+    if is_remote() and len(df):
+        try:
+            READ_BYTES["n"] += int(df.memory_usage(deep=True).sum())
+        except Exception:  # noqa: BLE001
+            pass
+    return df
+
+
 def read_mb() -> float:
     return READ_BYTES["n"] / 1048576
 

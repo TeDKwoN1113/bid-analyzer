@@ -111,11 +111,23 @@ if not use_sample and db.is_remote():
             st.info("잠시 뒤 새로고침해 보세요. 계속되면 이 화면을 캡처해 주세요. 그동안 사이드바의 샘플 데이터로 기능을 볼 수 있습니다.")
         st.stop()
 
+@st.cache_resource(ttl=600, max_entries=1)
+def _load(sample: bool):
+    # cache_resource: 표를 한 벌만 메모리에 둠 (cache_data 는 저장본+화면마다 복사본으로 2~3벌 → 메모리 부족으로 사이트가 꺼짐)
+    db.use_sample(sample)
+    return analysis.load_dataset()
+
+
+def _clear_caches():
+    st.cache_data.clear()
+    _load.clear()
+
+
 if not use_sample and settings.get("kepco_api_key"):
     try:  # 한전 공고는 사이트 서버에서 받음 (자동 수집 서버에서는 한전 접속이 막힘)
         import kepco as _kepco
         if _kepco.refresh_if_stale():
-            st.cache_data.clear()
+            _clear_caches()
     except Exception:  # noqa: BLE001  한전 문제로 사이트가 멈추지 않게
         pass
 
@@ -139,12 +151,6 @@ amt_range = st.sidebar.slider("기초금액 (억원)", 0.0, 100.0,
                               (0.0, settings["max_amount"] / 1e8), step=0.5)
 period = st.sidebar.selectbox("기간", ["최근 3개월", "최근 6개월", "최근 1년", "최근 2년", "전체"], index=2)
 days = {"최근 3개월": 90, "최근 6개월": 180, "최근 1년": 365, "최근 2년": 730}.get(period)
-
-
-@st.cache_data(ttl=600)
-def _load(sample: bool):
-    db.use_sample(sample)
-    return analysis.load_dataset()
 
 
 raw = _load(use_sample)
@@ -671,7 +677,7 @@ elif page == "📝 우리 투찰":
             db.upsert_many("my_bids", [{"bid_key": key, "amount": amount, "sajung": s_in or None, "memo": memo,
                                         "my_rank": None, "checked_at": None, "created_at": db.now(),
                                         "amount_source": "직접 입력"}])
-            st.cache_data.clear()
+            _clear_caches()
             st.success("저장했습니다.")
 
     v = analysis.my_bids_view(raw)
@@ -715,7 +721,7 @@ elif page == "📝 우리 투찰":
             db.execute("UPDATE my_bids SET amount = :a, sajung = NULL, amount_source = '직접 수정', "
                        "rec_amount = COALESCE(rec_amount, amount) WHERE bid_key = :k",
                        {"a": new_amt, "k": pe.split(" | ")[0]})
-            st.cache_data.clear()
+            _clear_caches()
             st.success("저장했습니다.")
             st.rerun()
     st.caption("낙찰 조건: 실제 사정율 ≤ 우리 사정율 < 1순위 사정율. 우리 사정율이 실제 사정율보다 낮으면 하한 미달, "
@@ -803,7 +809,7 @@ elif page == "🔌 한전 입찰":
             try:
                 n = kepco.collect(date.today() - timedelta(days=60), date.today())
                 st.success(f"{n:,}건 받았습니다.")
-                st.cache_data.clear()
+                _clear_caches()
                 kb_all = _kepco_all(use_sample)
             except Exception as e:  # noqa: BLE001
                 st.error(f"실패: {e}")
@@ -935,7 +941,7 @@ elif page == "🔌 한전 입찰":
                                 msgs.append(kepco.save_parsed_result(x, db.company()["bizno"]))
                             except ValueError as e:
                                 msgs.append(f"{x.get('bid_no')}: {e}")
-                        st.cache_data.clear()
+                        _clear_caches()
                         st.success(f"{len(many)}건 저장했습니다.")
                         for m_ in msgs:
                             st.caption("• " + m_)
@@ -984,7 +990,7 @@ elif page == "🔌 한전 입찰":
                         st.warning("최소한 '공고번호'와 '예정가격' 칸은 골라야 합니다.")
                     elif st.button("불러오기", type="primary", key="srm_import"):
                         n_ok, n_skip = kepco.import_results(raw_up, mapping, lr_default)
-                        st.cache_data.clear()
+                        _clear_caches()
                         matched = len(set(raw_up[mapping["bid_no"]].astype(str).str.strip())
                                       & set(kb_all["bid_no"].astype(str)))
                         st.success(f"{n_ok:,}건 저장 (예정가격 없는 줄 {n_skip:,}건 건너뜀) · "
@@ -1085,7 +1091,7 @@ elif page == "🔬 추천 검증":
                                  format_func=lambda m: analysis.STRATEGIES[m])
         if st.button("이 방식으로 저장"):
             db.set_kv("strategy", pick_mode)
-            st.cache_data.clear()
+            _clear_caches()
             st.success("저장했습니다. 오늘의 투찰·알림에 바로 적용됩니다.")
     c1, c2 = st.columns(2)
     days_bt = c1.selectbox("시험 기간", [30, 60, 90, 180], index=2, format_func=lambda d: f"최근 {d}일")
@@ -1198,7 +1204,7 @@ elif page == "⬇️ 데이터 수집":
                     db.vacuum()
                 except Exception as e:  # noqa: BLE001
                     st.caption(f"VACUUM 생략: {e}")
-                st.cache_data.clear()
+                _clear_caches()
             after = db.size_mb() or 0
             st.success(f"정리 완료: 예비가격 상세 {n1:,}행 · 다른 업종 공고 자료 {n2:,}행 삭제 → 현재 {after:,.0f}MB")
             st.caption("지운 자리는 새 자료가 다시 쓰므로 더 늘지는 않습니다. 숫자(MB)가 실제로 줄어드는 압축은 "
@@ -1230,7 +1236,7 @@ elif page == "⬇️ 데이터 수집":
     if st.button("수집 시작", type="primary"):
         bar = st.progress(0.0)
         res = collector.collect(d1, d2, jobs=jobs, progress=lambda t, p: bar.progress(min(p, 1.0), text=t))
-        st.cache_data.clear()
+        _clear_caches()
         for label, v in res.items():
             if v["stopped"]:
                 st.error(f"{label}: {v['count']:,}건 저장 후 중단 → {v['stopped']}")
@@ -1245,7 +1251,7 @@ elif page == "⬇️ 데이터 수집":
     if st.button("관심 공고 개찰순위 받기"):
         bar2 = st.progress(0.0)
         r = collector.collect_ranks_auto(progress=lambda t, p: bar2.progress(min(p, 1.0), text=t))
-        st.cache_data.clear()
+        _clear_caches()
         (st.warning if r["stopped"] or r["errors"] else st.success)(
             f"공고 {r['bids']}/{r['todo']}건, 업체 {r['rows']:,}행 저장 {r['stopped']}")
 
@@ -1298,7 +1304,7 @@ elif page == "⚙️ 설정 · API 점검":
         db.set_kv("company_bizno", cbiz.strip().replace("-", ""))
         db.set_kv("company_region", creg.strip())
         db.set_kv("company_licenses", clic.strip())
-        st.cache_data.clear()
+        _clear_caches()
         st.success("저장했습니다. (자동 수집·알림에도 적용됩니다)")
     with st.expander("🧮 적격심사 한도 계산 도우미"):
         st.caption("공고에 첨부된 적격심사 기준표의 값을 넣으면 '통과 가능한 최대 추정가격'을 계산합니다. "
@@ -1332,7 +1338,7 @@ elif page == "⚙️ 설정 · API 점검":
                 for k, v in (("qual_perf", perf), ("qual_mult", mult), ("qual_mgmt", mgmt)):
                     db.set_kv(k, str(v))
                 db.set_kv("qual_single", "1" if single else "0")
-                st.cache_data.clear()
+                _clear_caches()
                 st.success("적용했습니다. 이 금액을 넘는 공고에 경고가 붙습니다.")
         else:
             st.caption("실적 또는 경영상태 한도를 넣으면 계산됩니다.")
@@ -1446,7 +1452,7 @@ elif page == "⚙️ 설정 · API 점검":
             with st.spinner("수집 중…"):
                 try:
                     st.success(d2b.auto(st.write, quick=False))
-                    st.cache_data.clear()
+                    _clear_caches()
                 except Exception as e:  # noqa: BLE001
                     st.error(str(e))
     op = st.selectbox("API 종류", list(OPERATIONS.keys()),

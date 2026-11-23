@@ -59,9 +59,9 @@ def _raw_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         except Exception:  # noqa: BLE001  손상된 파일은 무시하고 전체 다시 받기
             cache = None
     if cache is None:
-        base = db.query_df(_BASE_SQL)
-        regs = db.query_df("SELECT bid_key, region FROM regions")
-        lics = db.query_df("SELECT bid_key, license FROM licenses")
+        base = db.query_df_big(_BASE_SQL)
+        regs = db.query_df_big("SELECT bid_key, region FROM regions")
+        lics = db.query_df_big("SELECT bid_key, license FROM licenses")
         cache = {"full_at": now, "at": now, "base": base, "regions": regs, "licenses": lics, "sql": _BASE_SQL}
     else:
         cut = (cache["at"] - pd.Timedelta(days=CACHE_MARGIN_DAYS)).strftime("%Y-%m-%d")
@@ -84,7 +84,8 @@ def _raw_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             os.replace(tmp, path)
         except OSError:
             pass
-    return cache["base"].copy(), cache["regions"], cache["licenses"]
+    # 복사하지 않음: _latest_order 가 assign 으로 새 표를 만들어 원본을 바꾸지 않음 (메모리 절약)
+    return cache["base"], cache["regions"], cache["licenses"]
 
 
 def load_dataset() -> pd.DataFrame:
