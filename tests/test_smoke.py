@@ -189,6 +189,23 @@ def test_kepco_mapping_and_stats(df):
     assert n_ok == 2 and n_skip == 1
     kb3 = kepco.load().set_index("bid_no")
     assert abs(kb3.at["SRM-TEST-1", "sajung"] - 99.8) < 1e-6
+    # SRM '개찰결과' 화면을 통째로 복사한 글 읽기
+    bno = kb[kb["end_dt"] < pd.Timestamp.now()].iloc[-1]["bid_no"]
+    txt = ("입찰공고 개찰결과\n공고번호\tE012608144\t공고명\t매암동 조사용역\n"
+           "예정가격\t102,160,664\t원\t적격률(%)\t89.745\n※ 적격심사 대상자 목록\n"
+           "심사순위\t업체명\t사업자등록번호\t대표자\t투찰금액\t투찰율(%)\t투찰일시\n"
+           "1번\t미라테크\t506-34-71764\t노경희\t91,853,705\t89.911\t2026/11/20 09:33\n"
+           "2번\t주식회사 한...\t617-81-14903\t김창윤\t91,984,000\t90.039\t2026/11/23 09:18\n"
+           "※ 적격률 탈락(미만, 초과) 대상자 목록\n업체명\t사업자등록번호\t대표자\t투찰금액\t투찰율(%)\n"
+           "가나\t123-45-67890\t홍길동\t90,000,000\t88.097\n").replace("E012608144", bno)
+    db.execute("UPDATE kepco_bids SET base_amt = 102300000 WHERE bid_no = :n", {"n": bno})
+    pr = kepco.parse_result_text(txt)
+    assert pr["bid_no"] == bno and pr["plan_price"] == 102160664 and pr["lower_rate"] == 89.745
+    assert [b["rank"] for b in pr["bidders"]] == [1, 2] and len(pr["below"]) == 1
+    msg = kepco.save_parsed_result(pr, "1234567890")
+    assert "참가 3곳" in msg and "우리 90,000,000원" in msg
+    one2 = kepco.load().set_index("bid_no").loc[bno]
+    assert one2["participants"] == 3 and one2["winner_sajung"] > 0
 
 
 def test_plan_price_fallback_from_rate(df):

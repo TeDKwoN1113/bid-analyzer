@@ -891,6 +891,25 @@ elif page == "🔌 한전 입찰":
             else:
                 st.caption("한전 개찰 결과가 10건 이상 기록되면 추천 사정율이 나옵니다. 그 전에는 사정율을 직접 정하세요.")
 
+        st.subheader("📋 SRM 개찰결과 화면 붙여넣기 (가장 쉬운 방법)")
+        st.caption("SRM → 입찰/계약 → 정보공개 → 개찰정보공개 → 공고의 '개찰결과보기'를 연 다음, "
+                   "그 화면을 클릭하고 Ctrl+A(전체 선택) → Ctrl+C(복사) → 아래 칸에 Ctrl+V. "
+                   "공고번호·예정가격·적격률·업체별 투찰금액을 알아서 읽어 저장합니다. 한 건씩 반복하세요.")
+        pasted_r = st.text_area("개찰결과 화면 붙여넣기", height=140, key="srm_result_paste")
+        if pasted_r.strip():
+            pr = kepco.parse_result_text(pasted_r)
+            st.write(f"읽은 내용: 공고번호 **{pr['bid_no'] or '못 찾음'}** · 예정가격 "
+                     f"**{(pr['plan_price'] or 0):,.0f}원** · 적격률 **{pr['lower_rate'] or '-'}%** · "
+                     f"순위 목록 **{len(pr['bidders'])}곳** · 적격률 탈락 **{len(pr['below'])}곳**")
+            if pr["bidders"]:
+                st.dataframe(pd.DataFrame(pr["bidders"][:5]), hide_index=True, use_container_width=True)
+            if st.button("이 개찰결과 저장", type="primary", key="srm_result_save"):
+                try:
+                    st.success(kepco.save_parsed_result(pr, db.company()["bizno"]))
+                    st.cache_data.clear()
+                except ValueError as e:
+                    st.error(str(e))
+
         st.subheader("📥 SRM 투찰 이력 한 번에 불러오기")
         st.caption("한전 SRM의 우리 회사 입찰 결과(개찰 결과)를 엑셀로 올리거나 화면 표를 복사해 붙여넣으면, "
                    "공고마다 예정가격·1순위 금액을 한 번에 저장해서 한전 사정율·낙찰확률 분석에 씁니다.")

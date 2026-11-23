@@ -306,6 +306,67 @@ def import_results(df_in: pd.DataFrame, mapping: dict, default_lr: float = 87.74
     return len(res), skipped
 
 
+def parse_result_text(text: str) -> dict:
+    """SRM '입찰공고 개찰결과' 화면을 통째로 복사한 글에서 숫자 읽기.
+    {bid_no, plan_price, lower_rate, bidders:[{rank, company, bizno, amount, rate}], below:[...]}"""
+    import re
+    t = text.replace("\xa0", " ")
+    out = {"bid_no": None, "plan_price": None, "lower_rate": None, "bidders": [], "below": []}
+    m = re.search(r"\b([A-Z]\d{9,})\b", t)
+    if m:
+        out["bid_no"] = m.group(1)
+
+    def num_after(label):
+        mm = re.search(r"(?:" + label + r")[^\d\n]{0,20}\n?\s*([\d,]+(?:\.\d+)?)", t)
+        return float(mm.group(1).replace(",", "")) if mm else None
+    out["plan_price"] = num_after("예정가격")
+    out["lower_rate"] = num_after(r"적격률|낙찰하한율|하한율")
+    # 적격률 탈락 목록은 따로 (참가업체 수에만 포함)
+    parts = re.split(r"적격률\s*탈락", t, maxsplit=1)
+    row_re = re.compile(r"(?:^|\n)\s*(\d+)\s*번?\s+(.+?)\s+(\d{3}-\d{2}-\d{5})\s+\S*?\s*([\d,]{5,})\s+(\d{2,3}\.\d+)")
+    for m in row_re.finditer(parts[0]):
+        out["bidders"].append({"rank": int(m.group(1)), "company": m.group(2).strip(),
+                               "bizno": m.group(3).replace("-", ""), "amount": float(m.group(4).replace(",", "")),
+                               "rate": float(m.group(5))})
+    if len(parts) > 1:
+        low_re = re.compile(r"(?:^|\n)\s*(.+?)\s+(\d{3}-\d{2}-\d{5})\s+\S*?\s*([\d,]{5,})\s+(\d{2,3}\.\d+)")
+        for m in low_re.finditer(parts[1]):
+            out["below"].append({"company": m.group(1).strip(), "bizno": m.group(2).replace("-", ""),
+                                 "amount": float(m.group(3).replace(",", "")), "rate": float(m.group(4))})
+    return out
+
+
+def save_parsed_result(p: dict, bizno: str = "") -> str:
+    """읽은 개찰결과를 저장 (kepco_results + 업체별 순위는 ranks 에 'KEPCO-공고번호'로)."""
+    if not p.get("bid_no") or not p.get("plan_price"):
+        raise ValueError("공고번호나 예정가격을 찾지 못했습니다. 화면 전체를 복사했는지 확인하세요.")
+    bd = sorted(p["bidders"], key=lambda x: x["rank"])
+    first = bd[0]["amount"] if bd else None
+    ours = next((x for x in bd + p["below"] if bizno and x["bizno"] == bizno), None)
+    db.upsert_many("kepco_results", [{
+        "bid_no": p["bid_no"], "plan_price": p["plan_price"], "first_amt": first,
+        "lower_rate": p["lower_rate"] or 87.745, "a_value": 0.0,
+        "participants": (len(bd) + len(p["below"])) or None,
+        "our_amount": ours["amount"] if ours else None, "our_rank": ours.get("rank") if ours else None,
+        "memo": "SRM 개찰결과 화면 붙여넣기", "created_at": db.now()}])
+    if bd:
+        db.upsert_many("ranks", [{"bid_key": "KEPCO-" + p["bid_no"], "rank": x["rank"], "bizno": x["bizno"],
+                                  "company": x["company"], "amount": x["amount"], "rate": x["rate"], "note": ""}
+                                 for x in bd[:100]])
+    have = db.query_df("SELECT base_amt FROM kepco_bids WHERE bid_no = :n", {"n": p["bid_no"]})
+    base = have["base_amt"].iloc[0] if len(have) else None
+    msg = f"{p['bid_no']}: 예정가격 {p['plan_price']:,.0f}원 · 참가 {len(bd) + len(p['below'])}곳"
+    if first:
+        msg += f" · 1순위 {first:,.0f}원"
+    if base and pd.notna(base):
+        msg += f" · 사정율 {p['plan_price'] / base * 100:.3f}%"
+    else:
+        msg += " · ⚠️ 한전 공고 목록에 기초금액이 없어 사정율 계산 불가 (공고가 1년보다 오래됐거나 번호가 다름)"
+    if ours:
+        msg += f" · 우리 {ours['amount']:,.0f}원" + (f" ({ours['rank']}위)" if ours.get("rank") else " (적격률 탈락)")
+    return msg
+
+
 def recommend(df: pd.DataFrame, row, region: str | None = None) -> dict | None:
     """기록된 한전 개찰 결과로 사정율별 낙찰확률을 계산해 추천 (나라장터와 같은 방식). 10건 미만이면 None."""
     import analysis
