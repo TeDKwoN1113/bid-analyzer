@@ -99,6 +99,14 @@ if not use_sample and db.is_remote():
             st.info("잠시 뒤 새로고침해 보세요. 계속되면 이 화면을 캡처해 주세요. 그동안 사이드바의 샘플 데이터로 기능을 볼 수 있습니다.")
         st.stop()
 
+if not use_sample and settings.get("kepco_api_key"):
+    try:  # 한전 공고는 사이트 서버에서 받음 (자동 수집 서버에서는 한전 접속이 막힘)
+        import kepco as _kepco
+        if _kepco.refresh_if_stale():
+            st.cache_data.clear()
+    except Exception:  # noqa: BLE001  한전 문제로 사이트가 멈추지 않게
+        pass
+
 st.sidebar.markdown("---")
 st.sidebar.subheader("필터")
 _company = db.company()

@@ -62,13 +62,13 @@ def _dt(x):
     return None
 
 
-def fetch(begin: date, end: date, company: str = "COM01", key: str | None = None) -> list[dict]:
+def fetch(begin: date, end: date, company: str = "COM01", key: str | None = None, timeout: int = 60) -> list[dict]:
     key = key or api_key()
     if not key:
         raise KepcoError("한전 API 인증키(KEPCO_API_KEY)가 없습니다.")
     r = requests.get(URL, params={"companyId": company, "noticeBeginDate": begin.strftime("%Y%m%d"),
                                   "noticeEndDate": end.strftime("%Y%m%d"), "apiKey": key,
-                                  "returnType": "json"}, timeout=60)
+                                  "returnType": "json"}, timeout=timeout)
     text = r.text.strip()
     try:
         data = r.json()
@@ -145,6 +145,22 @@ def collect(begin: date, end: date, companies=("COM01",), progress=None) -> int:
     return n
 
 
+def refresh_if_stale(hours: float = 3, days: int = 14) -> str | None:
+    """사이트를 열 때 한전 공고가 오래됐으면 최근 공고를 새로 받음.
+    (GitHub 자동 수집 서버에서는 한전 API 접속이 막혀서, 사이트 서버에서 받아 둠 → 텔레그램 알림도 이 자료 사용)"""
+    if not api_key():
+        return None
+    last = db.get_kv("kepco_fetched_at")
+    if last and pd.Timestamp.now() - pd.Timestamp(last) < pd.Timedelta(hours=hours):
+        return None
+    db.set_kv("kepco_fetched_at", pd.Timestamp.now().isoformat())   # 실패해도 매번 재시도하지 않도록 먼저 기록
+    today = date.today()
+    rows = [map_row(x) for x in fetch(today - timedelta(days=days), today, timeout=20)]
+    rows = [x for x in rows if x["bid_no"]]
+    db.upsert_many("kepco_bids", rows)
+    return f"한전 공고 {len(rows)}건 갱신"
+
+
 def auto(progress=print) -> str:
     """매일: 최근 60일 공고 새로 받기(진행상태·사정금액 갱신) + 처음 한 번 1년치."""
     if not api_key():
@@ -155,6 +171,7 @@ def auto(progress=print) -> str:
         n += collect(today - timedelta(days=BACKFILL_DAYS), today - timedelta(days=REFRESH_DAYS + 1), progress=progress)
         db.set_kv("kepco_backfill", "done")
     msg = f"한전 공고 {n:,}건"
+    db.set_kv("kepco_fetched_at", pd.Timestamp.now().isoformat())
     db.log("한전 공고(자동)", f"~{today}", n, msg)
     return msg
 
