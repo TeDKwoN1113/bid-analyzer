@@ -283,6 +283,22 @@ def test_our_actual_bid_found_from_ranks(df, monkeypatch):
     db.execute("DELETE FROM my_bids WHERE bid_key = :k", {"k": key})
 
 
+def test_limit_reasons_exclude_unenterable_bids():
+    d = pd.DataFrame({"name": ["[★기술자 및 실적보유★경부고속선 광명~동대구간 지장물검지장치 개량공사",
+                               "[★전차선실적및기술자보유★부산기지선 부산철도차량정비단(고속) 동력단로기 개량공사",
+                               "울산 남구 가로등 정비 전기공사", "학교 수변전 전기공사", "청사 전기공사", "도로 신호등 전기공사"],
+                      "perf_limit": [None, None, "N", "Y", "N", "N"], "pq": [None, None, None, None, "Y", None],
+                      "designated": [None] * 6,
+                      "ability_list": [None, None, None, None, None, "전기공사업 시공능력평가액 2,000,000,000원 이상"]})
+    db.set_kv("company_ability", "1262577000")
+    r = analysis.limit_reasons(d).tolist()
+    assert r[0] == "실적제한" and r[1] == "실적제한" and r[2] == "" and r[3] == "실적제한"
+    assert r[4] == "PQ심사" and r[5] == "시공능력 부족"
+    db.set_kv("allow_perf_limit", "1")          # 실적 있는 회사는 허용 가능
+    assert analysis.limit_reasons(d).tolist()[0] == ""
+    db.set_kv("allow_perf_limit", "0")
+
+
 def test_backtest_and_tune_rules(df):
     s, d = analysis.backtest(df, ["전기"], test_days=120, max_tests=20)
     assert not s.empty and set(s["방식"]) <= set(analysis.STRATEGIES.values())

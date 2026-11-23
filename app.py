@@ -231,6 +231,18 @@ if page == "🏠 오늘의 투찰":
     mine = db.query_df("SELECT bid_key, amount FROM my_bids")
     mine_map = dict(zip(mine["bid_key"].str.rsplit("-", n=1).str[0], mine["amount"]))  # 공고번호 기준
 
+    if only_ok:
+        _all = analysis.apply_filters(raw, keywords=keywords, regions=regions, max_amt=amt_range[1] * 1e8,
+                                      min_amt=amt_range[0] * 1e8 or None)
+        _all = _all[(_all["open_date"] >= now) & _all["plan_price"].isna()]
+        _why = analysis.limit_reasons(_all)
+        _out = _all[_why != ""].assign(이유=_why[_why != ""])
+        if len(_out):
+            with st.expander(f"🚫 참가 조건(실적·PQ·지명·시공능력) 때문에 뺀 공고 {len(_out)}건"):
+                st.dataframe(_out[["이유", "name", "org", "open_dt"]].rename(
+                    columns={"name": "공고명", "org": "기관", "open_dt": "개찰"}), hide_index=True,
+                    use_container_width=True)
+                st.caption("잘못 빠진 공고가 있으면 알려주세요. 실적이 있는 분야면 ⚙️ 설정에서 '실적제한 공고도 참가 가능'을 켤 수 있어요.")
     st.markdown(f"투찰 가능 **{len(todo)}건** · 3일 내 마감 "
                 f"**{(todo['마감기준'] <= now + pd.Timedelta(days=3)).sum()}건** · "
                 f"기초금액 공개 **{todo['base_amt_notice'].notna().sum()}건** · 최근 3일 개찰 **{len(recent)}건**")
@@ -1163,7 +1175,15 @@ elif page == "⚙️ 설정 · API 점검":
                          db.get_kv("qual_max_est", "") or "",
                          help="시공능력·실적·경영상태 등을 고려해 '이 금액까지는 수행능력 만점(심사 통과)'인 추정가격. "
                               "넘는 공고에는 경고가 붙습니다.")
+    ca1, ca2 = st.columns(2)
+    cabil = ca1.number_input("시공능력평가액(공시액, 원) — '시공능력 ○억 이상' 제한 공고 판단", 0.0, 1e13,
+                             float(db.get_kv("company_ability", "") or 0), 1_000_000.0, format="%.0f")
+    cperf = ca2.checkbox("실적제한 공고도 참가 가능으로 보기 (해당 실적이 있을 때만)",
+                         value=db.get_kv("allow_perf_limit", "0") == "1",
+                         help="끄면 실적경쟁·'실적 및 기술자 보유' 공고는 참가 가능 목록과 알림에서 뺍니다.")
     if st.button("회사 정보 저장"):
+        db.set_kv("company_ability", f"{cabil:.0f}" if cabil else "")
+        db.set_kv("allow_perf_limit", "1" if cperf else "0")
         db.set_kv("qual_max_est", qlim.strip())
         db.set_kv("company_name", cname.strip())
         db.set_kv("company_bizno", cbiz.strip().replace("-", ""))

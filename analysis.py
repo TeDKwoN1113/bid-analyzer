@@ -13,6 +13,7 @@ _BASE_SQL = """
         SELECT b.bid_key, b.bid_no, b.bid_ord, b.name, b.org, b.demand_org, b.region,
                b.main_type, b.method, b.contract_method, b.notice_dt, b.close_dt, b.open_dt, b.est_price,
                b.lower_rate, b.url, b.spec_docs, b.ntce_kind, b.qual_dt, b.begin_dt,
+               b.perf_limit, b.pq, b.designated, b.ability_list, b.joint_duty,
                ba.base_amt AS base_amt_notice, ba.a_value, ba.range_begin, ba.range_end,
                ba.a_apply, ba.pure_cost, ba.a_detail,
                p.plan_price, p.base_amt AS base_amt_open,
@@ -224,7 +225,47 @@ def eligible(df: pd.DataFrame, company_region: str | None = None,
     if "method" in df:
         # 수의시담: 발주기관이 정한 업체와 협상하는 수의계약 → 우리가 자유롭게 참가할 수 없음
         ok &= ~df["method"].fillna("").str.contains("수의시담", regex=False)
+    ok &= ~limit_reasons(df).astype(bool)
     return ok
+
+
+# 공고명에 실적·기술자 보유 조건이 적힌 경우 (예: ★기술자 및 실적보유★, ★전차선실적및기술자보유★, [실적제한])
+PERF_TITLE = r"실적\s*(?:및|보유|제한|있는|소지)|기술자\s*(?:및|보유)|실적[^\s★\]]{0,8}보유"
+
+
+def _ability_needed(x) -> float | None:
+    """시공능력평가금액 제한 목록에서 요구 금액(원) — 가장 큰 숫자."""
+    nums = [float(n.replace(",", "")) for n in re.findall(r"\d[\d,]{6,}", str(x or ""))]
+    return max(nums) if nums else None
+
+
+def limit_reasons(df: pd.DataFrame) -> pd.Series:
+    """우리가 못 들어가는 이유(실적제한·PQ·지명경쟁·시공능력 부족). 없으면 ''. 회사 설정으로 일부 허용 가능."""
+    out = pd.Series("", index=df.index, dtype=object)
+    if df.empty:
+        return out
+    allow_perf = db.get_kv("allow_perf_limit", "0") == "1"
+    try:
+        ability = float(db.get_kv("company_ability", "") or 0)
+    except ValueError:
+        ability = 0.0
+    name = df["name"].fillna("") if "name" in df else pd.Series("", index=df.index)
+
+    def add(mask, text):
+        nonlocal out
+        out = out.where(~mask, out + np.where(out == "", "", " · ") + text)
+    if not allow_perf:
+        perf = (df["perf_limit"].fillna("") == "Y") if "perf_limit" in df else pd.Series(False, index=df.index)
+        perf |= name.str.contains(PERF_TITLE, regex=True)
+        add(perf, "실적제한")
+    if "pq" in df:
+        add(df["pq"].fillna("") == "Y", "PQ심사")
+    if "designated" in df:
+        add(df["designated"].fillna("") == "Y", "지명경쟁")
+    if "ability_list" in df and ability > 0:
+        need = df["ability_list"].map(_ability_needed)
+        add(need.notna() & (need > ability), "시공능력 부족")
+    return out
 
 
 def apply_filters(df: pd.DataFrame, keywords=None, regions=None, orgs=None,

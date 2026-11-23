@@ -72,6 +72,12 @@ def map_bid(r: dict) -> list[tuple[str, dict]]:
         "ntce_kind": g(r, "ntceKindNm"),      # 등록공고 / 변경공고 / 취소공고 / 재공고 …
         "qual_dt": g(r, "bidQlfctRgstDt"),    # 입찰참가자격 등록(참가신청) 마감
         "begin_dt": g(r, "bidBeginDt"),       # 투찰 시작
+        # 참가 자격 판단용 (실적·PQ·지명·시공능력 제한이 있으면 우리가 못 들어갈 수 있음)
+        "perf_limit": g(r, "arsltCmptYn"),                     # 실적경쟁 여부 Y/N
+        "pq": g(r, "pqEvalYn"),                                # PQ 심사 여부
+        "designated": g(r, "dsgntCmptYn"),                     # 지명경쟁 여부
+        "ability_list": (str(g(r, "cnstrtnAbltyEvlAmtList", default="") or "")[:500] or None),  # 시공능력평가금액 제한
+        "joint_duty": g(r, "rgnDutyJntcontrctYn"),             # 지역의무공동도급 여부
     })]
 
 
@@ -301,6 +307,12 @@ def auto(progress=print) -> dict:
     summary = {}
     backfilled = False
     _cleanup(progress)  # 채우기 전에 먼저 공간 확보 (무료 한도 500MB)
+    if db.get_kv("bidlist_fields_v2") != "done":
+        # 새로 추가한 참가자격 항목(실적·PQ·지명·시공능력)을 채우려고 최근 45일 공고 목록을 다시 받음 (한 번만)
+        for i in range(45):
+            db.execute("DELETE FROM collect_days WHERE op = 'bid_list' AND day = :d",
+                       {"d": (date.today() - timedelta(days=i)).isoformat()})
+        db.set_kv("bidlist_fields_v2", "done")
     fixed = repair_empty_days()
     if fixed and progress:
         progress(f"0건으로 끝났던 평일 {fixed}일을 다시 받기로 표시")
