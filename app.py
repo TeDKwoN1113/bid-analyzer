@@ -131,6 +131,13 @@ raw = _load(use_sample)
 
 
 @st.cache_data(ttl=3600)
+def _kepco_all(sample: bool):
+    import kepco
+    db.use_sample(sample)
+    return kepco.load()
+
+
+@st.cache_data(ttl=3600)
 def _ranks(sample: bool):
     db.use_sample(sample)
     return analysis.load_ranks()
@@ -227,7 +234,7 @@ if page == "🏠 오늘의 투찰":
     close_all = elig["close_date"].dt.normalize()
     try:  # 한전 공고(참가 가능)도 달력에 함께 — 입찰신청 마감이 중요
         import kepco
-        _kb = kepco.load()
+        _kb = kepco.load(recent_days=20)
         if not _kb.empty:
             _kb = kepco.filter_bids(_kb, region=_company["region"] or "울산", local_only=True)
             qd_all = pd.concat([qd_all, _kb["attend_close_dt"].dt.normalize()])
@@ -733,7 +740,7 @@ elif page == "🔌 한전 입찰":
         st.warning("한전 API 인증키가 없습니다. 사용법: 전력데이터개방포털(bigdata.kepco.co.kr) 회원가입 → "
                    "API 인증키 신청 → 받은 40자리 키를 Streamlit Secrets 와 GitHub Secrets 에 "
                    "`KEPCO_API_KEY` 이름으로 넣기.")
-    kb_all = kepco.load()
+    kb_all = _kepco_all(use_sample)
     if kb_all.empty:
         st.info("아직 받은 한전 공고가 없습니다. 인증키를 넣은 뒤 아래 버튼으로 받거나, 다음 자동 수집을 기다리세요.")
     k1, k2 = st.columns(2)
@@ -742,7 +749,8 @@ elif page == "🔌 한전 입찰":
             try:
                 n = kepco.collect(date.today() - timedelta(days=60), date.today())
                 st.success(f"{n:,}건 받았습니다.")
-                kb_all = kepco.load()
+                st.cache_data.clear()
+                kb_all = _kepco_all(use_sample)
             except Exception as e:  # noqa: BLE001
                 st.error(f"실패: {e}")
     if not kb_all.empty:

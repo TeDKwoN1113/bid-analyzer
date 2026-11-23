@@ -416,10 +416,15 @@ def verify_limits(progress=None, max_bids: int = 150) -> str:
     n_bid, n_rows, stopped, errs, last_err = 0, 0, "", 0, ""
     for op, col in (("regions", "allowed_regions"), ("licenses", "licenses")):
         need = t[(t[col] == "") & ~t["bid_no"].map(lambda b: (b, op) in done).astype(bool)]
-        for bid_no in need["bid_no"].head(max_bids):
-            params = {"inqryDiv": s["inqry_div_bidno"].get(op, "2"), "bidNtceNo": bid_no}
+        for bid_no, bid_ord in need[["bid_no", "bid_ord"]].head(max_bids).itertuples(index=False):
             try:
-                items = api_client.call_all(op, params)
+                items = []
+                # 차수(bidNtceOrd)가 필수: 최신 차수로 보고, 없으면 원공고(000)도 확인
+                for o in dict.fromkeys([str(bid_ord or "000"), "000"]):
+                    params = {"inqryDiv": s["inqry_div_bidno"].get(op, "2"), "bidNtceNo": bid_no, "bidNtceOrd": o}
+                    items = api_client.call_all(op, params)
+                    if items:
+                        break
             except api_client.QuotaError as e:
                 stopped = str(e)
                 break

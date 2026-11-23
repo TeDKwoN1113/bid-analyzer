@@ -160,8 +160,33 @@ def auto(progress=print) -> str:
 
 
 # ---------------- 분석 ----------------
-def load() -> pd.DataFrame:
-    df = db.query_df("SELECT * FROM kepco_bids")
+_LOAD_COLS = ("bid_no, company, name, purchase_type, item_type, place, dept, notice_dt, attend_close_dt, "
+              "begin_dt, end_dt, progress, competition, bid_type, presumed_price, base_amt, approx_amt, "
+              "restrict_text, qualification, location, files")
+_load_mem: dict = {}
+
+
+def load(recent_days: int | None = None) -> pd.DataFrame:
+    """한전 공고. recent_days 를 주면 마감이 그 안쪽인 공고 + 결과를 기록한 공고만 (전송량 절약).
+    같은 프로세스에서 2분 안에 같은 조건으로 다시 부르면 메모리 값 재사용."""
+    import time
+    key = (db.url(), recent_days, db.WRITES["n"])
+    hit = _load_mem.get(key)
+    if hit and time.time() - hit[0] < 120:
+        return hit[1].copy()
+    if recent_days:
+        cut = (pd.Timestamp.now() - pd.Timedelta(days=recent_days)).strftime("%Y-%m-%d")
+        df = db.query_df(f"SELECT {_LOAD_COLS} FROM kepco_bids WHERE end_dt >= :c OR attend_close_dt >= :c "
+                         "OR bid_no IN (SELECT bid_no FROM kepco_results)", {"c": cut})
+    else:
+        df = db.query_df(f"SELECT {_LOAD_COLS} FROM kepco_bids")
+    df = _prepare(df)
+    _load_mem.clear()
+    _load_mem[key] = (time.time(), df)
+    return df.copy()
+
+
+def _prepare(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
     for c in ("notice_dt", "attend_close_dt", "begin_dt", "end_dt"):

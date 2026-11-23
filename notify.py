@@ -182,7 +182,7 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
                                  f"투찰마감 {_dt(r['close_dt'])} | 국방전자조달(d2b.go.kr)", (r["bid_key"], kind)))
     try:
         import kepco
-        kb = kepco.load()
+        kb = kepco.load(recent_days=10)
         if not kb.empty:
             kb = kepco.filter_bids(kb, region=db.company()["region"], local_only=True)
             kb = kb[(kb["attend_close_dt"] >= now) & (kb["attend_close_dt"] < now.normalize() + pd.Timedelta(days=2))]
@@ -283,7 +283,7 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
     # 3-2) 한전 새 공고 (공사 · 전기 관련)
     try:
         import kepco
-        kb = kepco.load()
+        kb = kepco.load(recent_days=10)
         if not kb.empty:
             reg = db.company()["region"]
             kb = kepco.filter_bids(kb, region=reg, local_only=scope() == "local")
@@ -294,7 +294,7 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
                 lines = [f"🔌 <b>한전 새 공고 {len(kb)}건</b>"]
                 for _, r in kb.head(DETAIL_MAX).iterrows():
                     amt = r["base_amt"] if pd.notna(r["base_amt"]) else r["presumed_price"]
-                    st_ = kepco.sajung_stats(kepco.load_cached(), r, reg) if pd.notna(r["base_amt"]) else None
+                    st_ = kepco.sajung_stats(kepco.load(recent_days=10), r, reg) if pd.notna(r["base_amt"]) else None
                     line = (f"• {_e(r['name'])}\n  {_e(r['발주사'])} {_e(r['place'] or '')} | "
                             f"{'기초' if pd.notna(r['base_amt']) else '추정'} {_won(amt)}\n"
                             f"  입찰신청마감 {_dt(r['attend_close_dt'])} | 입찰마감 {_dt(r['end_dt'])} | {_e(r['낙찰방법'] or '')}")
