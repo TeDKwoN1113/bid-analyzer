@@ -892,12 +892,24 @@ elif page == "🔌 한전 입찰":
                 st.caption("한전 개찰 결과가 10건 이상 기록되면 추천 사정율이 나옵니다. 그 전에는 사정율을 직접 정하세요.")
 
         st.subheader("📥 SRM 투찰 이력 한 번에 불러오기")
-        st.caption("한전 SRM에서 우리 회사 입찰 결과(개찰 결과) 목록을 엑셀로 내려받아 올리면, "
+        st.caption("한전 SRM의 우리 회사 입찰 결과(개찰 결과)를 엑셀로 올리거나 화면 표를 복사해 붙여넣으면, "
                    "공고마다 예정가격·1순위 금액을 한 번에 저장해서 한전 사정율·낙찰확률 분석에 씁니다.")
-        up = st.file_uploader("엑셀(xlsx·xls) 또는 CSV 파일", type=["xlsx", "xls", "csv"], key="srm_up")
-        if up is not None:
+        how_up = st.radio("방법", ["화면 표 복사해서 붙여넣기", "엑셀·CSV 파일 올리기"], horizontal=True, key="srm_how")
+        up, pasted = None, ""
+        if how_up.startswith("화면"):
+            st.caption("SRM 결과 화면의 표를 제목 줄부터 마우스로 끌어 선택 → Ctrl+C → 아래 칸에 Ctrl+V. "
+                       "여러 화면이면 나눠서 여러 번 해도 됩니다.")
+            pasted = st.text_area("여기에 붙여넣기", height=160, key="srm_paste")
+        else:
+            up = st.file_uploader("엑셀(xlsx·xls) 또는 CSV 파일", type=["xlsx", "xls", "csv"], key="srm_up")
+        if up is not None or pasted.strip():
             try:
-                if up.name.lower().endswith(".csv"):
+                import io as _io
+                if pasted.strip():
+                    txt = pasted.strip()
+                    sep = "\t" if "\t" in txt else ("," if txt.count(",") > txt.count("  ") else r"\s{2,}")
+                    raw_up = pd.read_csv(_io.StringIO(txt), sep=sep, engine="python", dtype=str)
+                elif up.name.lower().endswith(".csv"):
                     raw_up = pd.read_csv(up, encoding_errors="ignore")
                 else:
                     raw_up = pd.read_excel(up)
