@@ -455,14 +455,16 @@ def recommend(df: pd.DataFrame, row, region: str | None = None) -> dict | None:
         same = is_service(hist) == bool(is_service(pd.DataFrame([row])).iloc[0])
         if same.sum() >= 10:
             hist = hist[same]
+    basis = f"한전 {'용역' if row is not None and bool(is_service(pd.DataFrame([row])).iloc[0]) else '공사'} 전체"
     if row is not None and row.get("place") and (hist["place"] == row["place"]).sum() >= 30:
         hist = hist[hist["place"] == row["place"]]
+        basis = f"같은 사업소({row['place']})"
     if analysis.n_windows(hist) < 10:
         return None
     pts = analysis.best_points(analysis.win_curve(hist), top=1)
     if not pts:
         return None
-    return {"사정율": round(pts[0]["사정율"], 2), "낙찰확률": pts[0]["낙찰확률"], "n": len(hist)}
+    return {"사정율": round(pts[0]["사정율"], 2), "낙찰확률": pts[0]["낙찰확률"], "n": len(hist), "기준": basis}
 
 
 _cache: dict = {}
