@@ -795,7 +795,9 @@ elif page == "🔌 한전 입찰":
                 kb_all = _kepco_all(use_sample)
             except Exception as e:  # noqa: BLE001
                 st.error(f"실패: {e}")
-    if not kb_all.empty:
+    k_mode = st.radio("화면", ["📋 공고·일정", "🧮 투찰금액 계산", "📥 개찰결과·투찰 이력 넣기"], horizontal=True,
+                      key="kepco_mode", label_visibility="collapsed")
+    if not kb_all.empty and k_mode.startswith("📋"):
         reg = db.company()["region"] or "울산"
         scope_k = k2.radio("지역", [f"참가 가능 ({reg} + 전국)", f"{reg}만", "전체"], horizontal=True,
                            label_visibility="collapsed")
@@ -871,147 +873,149 @@ elif page == "🔌 한전 입찰":
             d = "" if pd.isna(r["end_dt"]) else r["end_dt"].strftime("%m/%d")
             return f"{d} {r['name'][:40]} ({r['bid_no']})"
 
-        st.subheader("🧮 한전 투찰금액 계산")
-        upk = cons[cons["end_dt"] >= nowk].sort_values("end_dt")
-        if upk.empty:
-            st.caption("진행 중인 한전 공사 공고가 없습니다.")
-        else:
-            opt = st.selectbox("공고", upk.index, format_func=lambda i: _lab(upk.loc[i]), key="kc_bid")
-            r = upk.loc[opt]
-            rec = kepco.recommend(kb_all, r, reg_k)
-            c1, c2, c3, c4 = st.columns(4)
-            base_k = c1.number_input("예비가격 기초금액(원)", 0.0, 1e12,
-                                     float(r["base_amt"]) if pd.notna(r["base_amt"]) else 0.0, 1000.0, format="%.0f")
-            lr_k = c2.number_input("하한율(%)", 0.0, 100.0, 87.745, 0.001, format="%.3f",
-                                   help="공고문(입찰공고서)의 낙찰하한율")
-            a_k = c3.number_input("A값(원)", 0.0, 1e12, 0.0, 1000.0, format="%.0f", help="공고문에 있으면 입력")
-            s_k = c4.number_input("사정율(%)", 95.0, 105.0, float(rec["사정율"]) if rec else 100.0, 0.01, format="%.2f")
-            if base_k > 0:
-                st.metric("💰 투찰금액", f"{analysis.bid_amount(base_k, s_k, lr_k, a_k):,}원")
-            if rec:
-                st.caption(f"참고 사정율 {rec['사정율']:.2f}% — 기록된 한전 개찰 결과 {rec['n']}건 기준 과거 낙찰확률 {rec['낙찰확률']:.1f}%")
-                st.warning("⚠️ 한전 용역은 우리 투찰 이력 260건으로 공정하게 시험했을 때, 이 방식(과거에 가장 많이 이긴 사정율)이 "
-                           "무작위보다 낫지 않았습니다. 참고용으로만 보세요. (참가 250곳 안팎·낙찰 구간 폭 0.02%p 수준이라 "
-                           "사정율 맞히기보다 경쟁사 투찰 분포를 피하는 방식이 필요 — 개찰결과(업체별 금액)가 쌓이면 다음 단계로 진행)")
+        if k_mode.startswith("🧮"):
+            st.subheader("🧮 한전 투찰금액 계산")
+            upk = cons[cons["end_dt"] >= nowk].sort_values("end_dt")
+            if upk.empty:
+                st.caption("진행 중인 한전 공사 공고가 없습니다.")
             else:
-                st.caption("한전 개찰 결과가 10건 이상 기록되면 추천 사정율이 나옵니다. 그 전에는 사정율을 직접 정하세요.")
-
-        st.subheader("📋 SRM 개찰결과 화면 붙여넣기 (가장 쉬운 방법)")
-        st.caption("SRM → 입찰/계약 → 정보공개 → 개찰정보공개 → 공고의 '개찰결과보기'를 연 다음, "
-                   "그 화면을 클릭하고 Ctrl+A(전체 선택) → Ctrl+C(복사) → 아래 칸에 Ctrl+V. "
-                   "공고번호·예정가격·적격률·업체별 투찰금액을 알아서 읽어 저장합니다. 한 건씩 반복하세요.")
-        st.caption("여러 공고를 한 칸에 계속 이어서 붙여넣어도 됩니다 (공고번호마다 나눠서 읽음). 다 붙인 뒤 한 번만 저장하세요.")
-        pasted_r = st.text_area("개찰결과 화면 붙여넣기 (여러 건 가능)", height=180, key="srm_result_paste")
-        if pasted_r.strip():
-            many = kepco.parse_many(pasted_r)
-            if not many:
-                st.warning("공고번호·예정가격을 찾지 못했습니다. 개찰결과 화면 전체(Ctrl+A)를 복사했는지 확인하세요.")
-            else:
-                st.dataframe(pd.DataFrame([{"공고번호": x["bid_no"], "예정가격": f"{x['plan_price']:,.0f}",
-                                            "적격률": x["lower_rate"], "순위 목록": len(x["bidders"]),
-                                            "적격률 탈락": len(x["below"]),
-                                            "1순위 금액": f"{x['bidders'][0]['amount']:,.0f}" if x["bidders"] else ""}
-                                           for x in many]), hide_index=True, use_container_width=True)
-                if st.button(f"{len(many)}건 저장", type="primary", key="srm_result_save"):
-                    msgs = []
-                    for x in many:
-                        try:
-                            msgs.append(kepco.save_parsed_result(x, db.company()["bizno"]))
-                        except ValueError as e:
-                            msgs.append(f"{x.get('bid_no')}: {e}")
-                    st.cache_data.clear()
-                    st.success(f"{len(many)}건 저장했습니다.")
-                    for m_ in msgs:
-                        st.caption("• " + m_)
-
-        st.subheader("📥 SRM 투찰 이력 한 번에 불러오기")
-        st.caption("한전 SRM의 우리 회사 입찰 결과(개찰 결과)를 엑셀로 올리거나 화면 표를 복사해 붙여넣으면, "
-                   "공고마다 예정가격·1순위 금액을 한 번에 저장해서 한전 사정율·낙찰확률 분석에 씁니다.")
-        how_up = st.radio("방법", ["화면 표 복사해서 붙여넣기", "엑셀·CSV 파일 올리기"], horizontal=True, key="srm_how")
-        up, pasted = None, ""
-        if how_up.startswith("화면"):
-            st.caption("SRM 결과 화면의 표를 제목 줄부터 마우스로 끌어 선택 → Ctrl+C → 아래 칸에 Ctrl+V. "
-                       "여러 화면이면 나눠서 여러 번 해도 됩니다.")
-            pasted = st.text_area("여기에 붙여넣기", height=160, key="srm_paste")
-        else:
-            up = st.file_uploader("엑셀(xlsx·xls) 또는 CSV 파일 — 모두부드 '투찰 이력' 엑셀도 그대로 올리면 됩니다",
-                                  type=["xlsx", "xls", "csv"], key="srm_up", accept_multiple_files=False)
-        if up is not None or pasted.strip():
-            try:
-                import io as _io
-                if pasted.strip():
-                    txt = pasted.strip()
-                    sep = "\t" if "\t" in txt else ("," if txt.count(",") > txt.count("  ") else r"\s{2,}")
-                    raw_up = pd.read_csv(_io.StringIO(txt), sep=sep, engine="python", dtype=str)
+                opt = st.selectbox("공고", upk.index, format_func=lambda i: _lab(upk.loc[i]), key="kc_bid")
+                r = upk.loc[opt]
+                rec = kepco.recommend(kb_all, r, reg_k)
+                c1, c2, c3, c4 = st.columns(4)
+                base_k = c1.number_input("예비가격 기초금액(원)", 0.0, 1e12,
+                                         float(r["base_amt"]) if pd.notna(r["base_amt"]) else 0.0, 1000.0, format="%.0f")
+                lr_k = c2.number_input("하한율(%)", 0.0, 100.0, 87.745, 0.001, format="%.3f",
+                                       help="공고문(입찰공고서)의 낙찰하한율")
+                a_k = c3.number_input("A값(원)", 0.0, 1e12, 0.0, 1000.0, format="%.0f", help="공고문에 있으면 입력")
+                s_k = c4.number_input("사정율(%)", 95.0, 105.0, float(rec["사정율"]) if rec else 100.0, 0.01, format="%.2f")
+                if base_k > 0:
+                    st.metric("💰 투찰금액", f"{analysis.bid_amount(base_k, s_k, lr_k, a_k):,}원")
+                if rec:
+                    st.caption(f"참고 사정율 {rec['사정율']:.2f}% — 기록된 한전 개찰 결과 {rec['n']}건 기준 과거 낙찰확률 {rec['낙찰확률']:.1f}%")
+                    st.warning("⚠️ 한전 용역은 우리 투찰 이력 260건으로 공정하게 시험했을 때, 이 방식(과거에 가장 많이 이긴 사정율)이 "
+                               "무작위보다 낫지 않았습니다. 참고용으로만 보세요. (참가 250곳 안팎·낙찰 구간 폭 0.02%p 수준이라 "
+                               "사정율 맞히기보다 경쟁사 투찰 분포를 피하는 방식이 필요 — 개찰결과(업체별 금액)가 쌓이면 다음 단계로 진행)")
                 else:
-                    raw_up = kepco.read_table_file(up, up.name)
-                # 제목 줄이 위에 몇 줄 있는 양식 대비: '공고번호'가 들어 있는 줄을 칸 이름으로
-                if not any("공고" in str(c) or "번호" in str(c) for c in raw_up.columns):
-                    for i in range(min(10, len(raw_up))):
-                        if raw_up.iloc[i].astype(str).str.contains("공고|입찰번호").any():
-                            raw_up.columns = raw_up.iloc[i].astype(str)
-                            raw_up = raw_up.iloc[i + 1:].reset_index(drop=True)
-                            break
-                st.caption(f"{len(raw_up):,}줄 · 앞부분 미리보기")
-                st.dataframe(raw_up.head(5), use_container_width=True)
-                guess = kepco.guess_columns(list(raw_up.columns))
-                cols_opt = ["(없음)"] + list(raw_up.columns)
-                mapping = {}
-                mcols = st.columns(2)
-                for i_, (k_, (label_, _)) in enumerate(kepco.IMPORT_FIELDS.items()):
-                    dflt = cols_opt.index(guess[k_]) if k_ in guess and guess[k_] in cols_opt else 0
-                    sel = mcols[i_ % 2].selectbox(label_, cols_opt, index=dflt, key=f"map_{k_}")
-                    if sel != "(없음)":
-                        mapping[k_] = sel
-                lr_default = st.number_input("하한율 칸이 없을 때 쓸 하한율(%)", 0.0, 100.0, 87.745, 0.001, format="%.3f")
-                if "bid_no" not in mapping or "plan_price" not in mapping:
-                    st.warning("최소한 '공고번호'와 '예정가격' 칸은 골라야 합니다.")
-                elif st.button("불러오기", type="primary", key="srm_import"):
-                    n_ok, n_skip = kepco.import_results(raw_up, mapping, lr_default)
-                    st.cache_data.clear()
-                    matched = len(set(raw_up[mapping["bid_no"]].astype(str).str.strip())
-                                  & set(kb_all["bid_no"].astype(str)))
-                    st.success(f"{n_ok:,}건 저장 (예정가격 없는 줄 {n_skip:,}건 건너뜀) · "
-                               f"한전 공고 목록과 공고번호가 맞은 것 {matched:,}건")
-                    if n_ok and matched == 0:
-                        st.info("공고번호 형식이 한전 API와 다를 수 있어요. 이 화면을 캡처해 보내주시면 맞춰 드릴게요. "
-                                "기초금액 칸이 있으면 공고번호가 안 맞아도 사정율은 계산됩니다.")
-            except Exception as e:  # noqa: BLE001
-                st.error(f"파일을 읽지 못했습니다: {e}")
+                    st.caption("한전 개찰 결과가 10건 이상 기록되면 추천 사정율이 나옵니다. 그 전에는 사정율을 직접 정하세요.")
 
-        st.subheader("📝 한전 개찰 결과 기록")
-        st.caption("SRM에서 개찰 결과(예정가격·1순위 금액)를 보고 적어 두면, 한전 사정율·낙찰확률 분석에 쓰입니다. "
-                   "우리가 참가하지 않은 공고도 결과를 볼 수 있으면 적어 주세요. 많을수록 정확해집니다.")
-        pastk = cons[(cons["end_dt"] < nowk) & (cons["end_dt"] >= nowk - pd.Timedelta(days=120))] \
-            .sort_values("end_dt", ascending=False)
-        if pastk.empty:
-            st.caption("최근 120일 안에 마감된 한전 공사 공고가 없습니다.")
-        else:
-            with st.form("kepco_result"):
-                opt2 = st.selectbox("공고", pastk.index, format_func=lambda i: _lab(pastk.loc[i]))
-                f1, f2, f3 = st.columns(3)
-                plan_k = f1.number_input("예정가격(원)", 0.0, 1e12, 0.0, 1000.0, format="%.0f")
-                first_k = f2.number_input("1순위(낙찰) 금액(원)", 0.0, 1e12, 0.0, 1000.0, format="%.0f")
-                part_k = f3.number_input("참가업체 수", 0, 10000, 0)
-                g1, g2, g3, g4 = st.columns(4)
-                lr2 = g1.number_input("하한율(%)", 0.0, 100.0, 87.745, 0.001, format="%.3f")
-                a2 = g2.number_input("A값(원)", 0.0, 1e12, 0.0, 1000.0, format="%.0f")
-                our_k = g3.number_input("우리 투찰금액(원, 선택)", 0.0, 1e12, 0.0, 1000.0, format="%.0f")
-                rank_k = g4.number_input("우리 순위(선택)", 0, 10000, 0)
-                if st.form_submit_button("저장", type="primary"):
-                    if plan_k <= 0:
-                        st.error("예정가격을 입력하세요.")
+        if k_mode.startswith("📥"):
+            st.subheader("📋 SRM 개찰결과 화면 붙여넣기 (가장 쉬운 방법)")
+            st.caption("SRM → 입찰/계약 → 정보공개 → 개찰정보공개 → 공고의 '개찰결과보기'를 연 다음, "
+                       "그 화면을 클릭하고 Ctrl+A(전체 선택) → Ctrl+C(복사) → 아래 칸에 Ctrl+V. "
+                       "공고번호·예정가격·적격률·업체별 투찰금액을 알아서 읽어 저장합니다. 한 건씩 반복하세요.")
+            st.caption("여러 공고를 한 칸에 계속 이어서 붙여넣어도 됩니다 (공고번호마다 나눠서 읽음). 다 붙인 뒤 한 번만 저장하세요.")
+            pasted_r = st.text_area("개찰결과 화면 붙여넣기 (여러 건 가능)", height=180, key="srm_result_paste")
+            if pasted_r.strip():
+                many = kepco.parse_many(pasted_r)
+                if not many:
+                    st.warning("공고번호·예정가격을 찾지 못했습니다. 개찰결과 화면 전체(Ctrl+A)를 복사했는지 확인하세요.")
+                else:
+                    st.dataframe(pd.DataFrame([{"공고번호": x["bid_no"], "예정가격": f"{x['plan_price']:,.0f}",
+                                                "적격률": x["lower_rate"], "순위 목록": len(x["bidders"]),
+                                                "적격률 탈락": len(x["below"]),
+                                                "1순위 금액": f"{x['bidders'][0]['amount']:,.0f}" if x["bidders"] else ""}
+                                               for x in many]), hide_index=True, use_container_width=True)
+                    if st.button(f"{len(many)}건 저장", type="primary", key="srm_result_save"):
+                        msgs = []
+                        for x in many:
+                            try:
+                                msgs.append(kepco.save_parsed_result(x, db.company()["bizno"]))
+                            except ValueError as e:
+                                msgs.append(f"{x.get('bid_no')}: {e}")
+                        st.cache_data.clear()
+                        st.success(f"{len(many)}건 저장했습니다.")
+                        for m_ in msgs:
+                            st.caption("• " + m_)
+
+            st.subheader("📥 투찰 이력 엑셀 올리기 (모두부드·SRM)")
+            st.caption("한전 SRM의 우리 회사 입찰 결과(개찰 결과)를 엑셀로 올리거나 화면 표를 복사해 붙여넣으면, "
+                       "공고마다 예정가격·1순위 금액을 한 번에 저장해서 한전 사정율·낙찰확률 분석에 씁니다.")
+            how_up = st.radio("방법", ["엑셀·CSV 파일 올리기", "화면 표 복사해서 붙여넣기"], horizontal=True, key="srm_how")
+            up, pasted = None, ""
+            if how_up.startswith("화면"):
+                st.caption("SRM 결과 화면의 표를 제목 줄부터 마우스로 끌어 선택 → Ctrl+C → 아래 칸에 Ctrl+V. "
+                           "여러 화면이면 나눠서 여러 번 해도 됩니다.")
+                pasted = st.text_area("여기에 붙여넣기", height=160, key="srm_paste")
+            else:
+                up = st.file_uploader("엑셀(xlsx·xls) 또는 CSV 파일 — 모두부드 '투찰 이력' 엑셀도 그대로 올리면 됩니다",
+                                      type=["xlsx", "xls", "csv"], key="srm_up", accept_multiple_files=False)
+            if up is not None or pasted.strip():
+                try:
+                    import io as _io
+                    if pasted.strip():
+                        txt = pasted.strip()
+                        sep = "\t" if "\t" in txt else ("," if txt.count(",") > txt.count("  ") else r"\s{2,}")
+                        raw_up = pd.read_csv(_io.StringIO(txt), sep=sep, engine="python", dtype=str)
                     else:
-                        db.upsert_many("kepco_results", [{
-                            "bid_no": pastk.loc[opt2, "bid_no"], "plan_price": plan_k,
-                            "first_amt": first_k or None, "lower_rate": lr2, "a_value": a2,
-                            "participants": part_k or None, "our_amount": our_k or None, "our_rank": rank_k or None,
-                            "memo": "", "created_at": db.now()}])
-                        b0 = pastk.loc[opt2, "base_amt"]
-                        msg = f" (사정율 {plan_k / b0 * 100:.3f}%)" if pd.notna(b0) and b0 else ""
-                        st.success("저장했습니다" + msg)
-        nrec = int(db.query_df("SELECT COUNT(*) AS n FROM kepco_results")["n"].iloc[0])
-        st.caption(f"지금까지 기록한 한전 개찰 결과: {nrec}건")
+                        raw_up = kepco.read_table_file(up, up.name)
+                    # 제목 줄이 위에 몇 줄 있는 양식 대비: '공고번호'가 들어 있는 줄을 칸 이름으로
+                    if not any("공고" in str(c) or "번호" in str(c) for c in raw_up.columns):
+                        for i in range(min(10, len(raw_up))):
+                            if raw_up.iloc[i].astype(str).str.contains("공고|입찰번호").any():
+                                raw_up.columns = raw_up.iloc[i].astype(str)
+                                raw_up = raw_up.iloc[i + 1:].reset_index(drop=True)
+                                break
+                    st.caption(f"{len(raw_up):,}줄 · 앞부분 미리보기")
+                    st.dataframe(raw_up.head(5), use_container_width=True)
+                    guess = kepco.guess_columns(list(raw_up.columns))
+                    cols_opt = ["(없음)"] + list(raw_up.columns)
+                    mapping = {}
+                    mcols = st.columns(2)
+                    for i_, (k_, (label_, _)) in enumerate(kepco.IMPORT_FIELDS.items()):
+                        dflt = cols_opt.index(guess[k_]) if k_ in guess and guess[k_] in cols_opt else 0
+                        sel = mcols[i_ % 2].selectbox(label_, cols_opt, index=dflt, key=f"map_{k_}")
+                        if sel != "(없음)":
+                            mapping[k_] = sel
+                    lr_default = st.number_input("하한율 칸이 없을 때 쓸 하한율(%)", 0.0, 100.0, 87.745, 0.001, format="%.3f")
+                    if "bid_no" not in mapping or "plan_price" not in mapping:
+                        st.warning("최소한 '공고번호'와 '예정가격' 칸은 골라야 합니다.")
+                    elif st.button("불러오기", type="primary", key="srm_import"):
+                        n_ok, n_skip = kepco.import_results(raw_up, mapping, lr_default)
+                        st.cache_data.clear()
+                        matched = len(set(raw_up[mapping["bid_no"]].astype(str).str.strip())
+                                      & set(kb_all["bid_no"].astype(str)))
+                        st.success(f"{n_ok:,}건 저장 (예정가격 없는 줄 {n_skip:,}건 건너뜀) · "
+                                   f"한전 공고 목록과 공고번호가 맞은 것 {matched:,}건")
+                        if n_ok and matched == 0:
+                            st.info("공고번호 형식이 한전 API와 다를 수 있어요. 이 화면을 캡처해 보내주시면 맞춰 드릴게요. "
+                                    "기초금액 칸이 있으면 공고번호가 안 맞아도 사정율은 계산됩니다.")
+                except Exception as e:  # noqa: BLE001
+                    st.error(f"파일을 읽지 못했습니다: {e}")
+
+            st.subheader("📝 한전 개찰 결과 기록")
+            st.caption("SRM에서 개찰 결과(예정가격·1순위 금액)를 보고 적어 두면, 한전 사정율·낙찰확률 분석에 쓰입니다. "
+                       "우리가 참가하지 않은 공고도 결과를 볼 수 있으면 적어 주세요. 많을수록 정확해집니다.")
+            pastk = cons[(cons["end_dt"] < nowk) & (cons["end_dt"] >= nowk - pd.Timedelta(days=120))] \
+                .sort_values("end_dt", ascending=False)
+            if pastk.empty:
+                st.caption("최근 120일 안에 마감된 한전 공사 공고가 없습니다.")
+            else:
+                with st.form("kepco_result"):
+                    opt2 = st.selectbox("공고", pastk.index, format_func=lambda i: _lab(pastk.loc[i]))
+                    f1, f2, f3 = st.columns(3)
+                    plan_k = f1.number_input("예정가격(원)", 0.0, 1e12, 0.0, 1000.0, format="%.0f")
+                    first_k = f2.number_input("1순위(낙찰) 금액(원)", 0.0, 1e12, 0.0, 1000.0, format="%.0f")
+                    part_k = f3.number_input("참가업체 수", 0, 10000, 0)
+                    g1, g2, g3, g4 = st.columns(4)
+                    lr2 = g1.number_input("하한율(%)", 0.0, 100.0, 87.745, 0.001, format="%.3f")
+                    a2 = g2.number_input("A값(원)", 0.0, 1e12, 0.0, 1000.0, format="%.0f")
+                    our_k = g3.number_input("우리 투찰금액(원, 선택)", 0.0, 1e12, 0.0, 1000.0, format="%.0f")
+                    rank_k = g4.number_input("우리 순위(선택)", 0, 10000, 0)
+                    if st.form_submit_button("저장", type="primary"):
+                        if plan_k <= 0:
+                            st.error("예정가격을 입력하세요.")
+                        else:
+                            db.upsert_many("kepco_results", [{
+                                "bid_no": pastk.loc[opt2, "bid_no"], "plan_price": plan_k,
+                                "first_amt": first_k or None, "lower_rate": lr2, "a_value": a2,
+                                "participants": part_k or None, "our_amount": our_k or None, "our_rank": rank_k or None,
+                                "memo": "", "created_at": db.now()}])
+                            b0 = pastk.loc[opt2, "base_amt"]
+                            msg = f" (사정율 {plan_k / b0 * 100:.3f}%)" if pd.notna(b0) and b0 else ""
+                            st.success("저장했습니다" + msg)
+            nrec = int(db.query_df("SELECT COUNT(*) AS n FROM kepco_results")["n"].iloc[0])
+            st.caption(f"지금까지 기록한 한전 개찰 결과: {nrec}건")
 
     with st.expander("🔍 한전 API 원본 확인 (항목 점검용)"):
         if st.button("최근 7일 원본 1건 보기", disabled=not settings.get("kepco_api_key")):
