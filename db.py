@@ -370,6 +370,35 @@ def prune_nontarget(keywords: list[str]) -> int:
     return n
 
 
+CHILD_TABLES = ("regions", "licenses", "base_amounts", "plans", "prelim_prices", "openings", "results", "ranks")
+
+
+def _bid_no_expr(col: str = "bid_key") -> str:
+    """bid_key('R26BK01843200-000')에서 공고번호('R26BK01843200')만 꺼내는 SQL."""
+    if engine().dialect.name == "sqlite":
+        return f"CASE WHEN instr({col}, '-') > 0 THEN substr({col}, 1, instr({col}, '-') - 1) ELSE {col} END"
+    return f"split_part({col}, '-', 1)"
+
+
+def known_bid_nos() -> set[str]:
+    """bids 표에 있는 공고번호 (다른 업종이라 지운 공고는 없음)."""
+    return set(query_df("SELECT DISTINCT bid_no FROM bids")["bid_no"].dropna().astype(str))
+
+
+def prune_orphans() -> int:
+    """공고(bids)는 지웠는데 나중에 다시 들어온 딸린 자료(개찰결과·예비가격 등)를 삭제.
+
+    다른 업종 공고를 지운 뒤에도 개찰결과·예비가격은 날짜별로 계속 들어오므로, 주인 없는 자료가 쌓여
+    저장 공간을 차지함. 국방(D2B…)·한전(KEPCO-…)·우리 투찰 기록은 건드리지 않음."""
+    n = 0
+    with engine().begin() as c:
+        for t in CHILD_TABLES:
+            n += c.execute(text(f"""DELETE FROM {t} WHERE bid_key NOT LIKE 'KEPCO-%' AND bid_key NOT LIKE 'D2B%'
+                    AND NOT EXISTS (SELECT 1 FROM bids b WHERE b.bid_no = {_bid_no_expr(t + '.bid_key')})
+                    AND NOT EXISTS (SELECT 1 FROM my_bids m WHERE m.bid_key = {t}.bid_key)""")).rowcount or 0
+    return n
+
+
 def vacuum() -> None:
     """지운 자리를 새 데이터가 다시 쓰도록 정리 (PostgreSQL)."""
     if engine().dialect.name != "postgresql":
@@ -384,14 +413,32 @@ def compact(limit_mb: float) -> list[str]:
     VACUUM FULL 은 잠시 테이블 사본만큼 공간이 더 필요하므로 '현재 용량 + 테이블 크기 < 한도'일 때만 실행."""
     if engine().dialect.name != "postgresql":
         return []
-    sizes = query_df("""SELECT relname AS t, pg_total_relation_size(relid) / 1048576.0 AS mb
-                        FROM pg_catalog.pg_stat_user_tables ORDER BY 2""")
-    done = []
-    for t, mb in zip(sizes["t"], sizes["mb"]):
+    sizes = query_df("""SELECT s.relname AS t, pg_total_relation_size(s.relid) / 1048576.0 AS mb,
+                               pg_relation_size(s.relid) / 1048576.0 AS heap_mb, c.reltuples AS n
+                        FROM pg_catalog.pg_stat_user_tables s JOIN pg_class c ON c.oid = s.relid""")
+    est = {}
+    for t, mb, heap, n in zip(sizes["t"], sizes["mb"], sizes["heap_mb"], sizes["n"]):
         if t not in TABLES:
             continue
+        # 새로 쓴 뒤 크기 추정 = 행 수 × 실제 행 크기 (지운 자리는 빠짐) + 색인 몫. 모르면 지금 크기.
+        try:
+            w = float(query_df(f"SELECT avg(pg_column_size(x.*)) AS w FROM (SELECT * FROM {t} LIMIT 2000) x")["w"].iloc[0] or 0)
+        except Exception:  # noqa: BLE001
+            w = 0
+        if n and n > 0 and w > 0 and heap > 0:
+            live_heap = n * (w + 28) / 1048576
+            est[t] = min(mb, live_heap * (mb / heap) * 1.2 + 1)
+        else:
+            est[t] = mb
+    done = []
+    cur_sizes = dict(zip(sizes["t"], sizes["mb"]))
+    # 필요한 여유(새로 쓴 크기)가 작은 표부터 → 먼저 줄인 만큼 다음 표의 여유가 생김
+    for t in sorted(est, key=est.get):
+        mb = est[t]
+        if cur_sizes.get(t, 0) - mb < 0.5:
+            continue  # 줄어들 게 거의 없음
         cur = size_mb() or 0
-        if cur + mb >= limit_mb * 0.97:
+        if cur + mb >= limit_mb * 0.99:
             done.append(f"{t} 건너뜀(여유 부족)")
             continue
         try:

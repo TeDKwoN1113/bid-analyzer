@@ -227,12 +227,28 @@ def collect_day(op: str, mapper, d: date) -> int:
             if not row.get("bid_key") or row["bid_key"].startswith("-"):
                 continue
             batches.setdefault(table, []).append(row)
+    if op != "bid_list":
+        # 공고(bids)가 없는 자료는 버림: 다른 업종이라 지운 공고의 개찰결과·예비가격이 다시 쌓이는 것을 막음
+        known = _known_bid_nos()
+        for table in list(batches):
+            batches[table] = [r for r in batches[table] if r["bid_key"].split("-")[0] in known]
     for table, rows in batches.items():
+        if table == "bids":
+            _KNOWN["nos"] = None  # 새 공고가 들어왔으니 다음에 다시 읽음
         db.upsert_many(table, rows)
     # 평일인데 0건이면 (호출 한도·일시 장애 가능성) '완료'로 표시하지 않고 다음에 다시 받음
     if items or d.weekday() >= 5 or op not in MUST_HAVE_DATA:
         db.mark_day(op, d.isoformat(), len(items))
     return len(items)
+
+
+_KNOWN = {"nos": None}
+
+
+def _known_bid_nos() -> set[str]:
+    if _KNOWN["nos"] is None:
+        _KNOWN["nos"] = db.known_bid_nos()
+    return _KNOWN["nos"]
 
 
 # 평일이면 반드시 자료가 있어야 하는 항목
@@ -289,7 +305,8 @@ def _cleanup(progress=None) -> None:
     try:
         import analysis
         kw = analysis.company_keywords()
-        n = db.prune_prelim(kw) + db.prune_nontarget(kw)
+        n = db.prune_prelim(kw) + db.prune_nontarget(kw) + db.prune_orphans()
+        _KNOWN["nos"] = None
         db.vacuum()
         if progress:
             progress(f"사전 정리 {n:,}행 · DB {db.size_mb() or 0:,.0f}MB")
@@ -336,7 +353,7 @@ def auto(progress=print) -> dict:
         db.log(label + "(자동)", f"{days[-1] if missing else recent[0]}~{today}", res["count"], msg)
         summary[label] = res
         if progress:
-            progress(f"{label}: {res['count']:,}건, {msg}")
+            progress(f"{label}: {res['count']:,}건, {msg}  [누적 내려받음 {db.read_mb():,.0f}MB]")
     try:
         import d2b
         summary["국방"] = d2b.auto(progress)
@@ -362,9 +379,15 @@ def auto(progress=print) -> dict:
     if backfilled:
         # 과거 자료를 새로 채웠으면 분석 표 캐시를 한 번 전체 다시 받게 표시
         db.set_kv("dataset_full_reload_after", pd.Timestamp.now().isoformat())
+    if progress:
+        progress(f"[누적 내려받음 {db.read_mb():,.0f}MB] 국방·한전·지역면허 확인 후")
     r = collect_ranks_auto()
     summary["개찰순위"] = r
+    if progress:
+        progress(f"[누적 내려받음 {db.read_mb():,.0f}MB] 개찰순위 후")
     summary["우리 투찰"] = update_my_bids(progress)
+    if progress:
+        progress(f"[누적 내려받음 {db.read_mb():,.0f}MB] 우리 투찰 확인 후")
     if progress:
         progress(f"개찰순위: 공고 {r['bids']}건 / 업체 {r['rows']:,}행 {r['stopped']}")
     summary["저장 공간"] = maintenance(progress)
@@ -389,7 +412,8 @@ def maintenance(progress=None) -> str:
     s = load_settings()
     kw = analysis.company_keywords()
     removed = db.prune_prelim(kw)
-    other = db.prune_nontarget(kw)
+    other = db.prune_nontarget(kw) + db.prune_orphans()
+    _KNOWN["nos"] = None
     try:
         db.vacuum()
         print("압축:", ", ".join(db.compact(s["db_limit_mb"])))

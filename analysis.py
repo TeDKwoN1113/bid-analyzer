@@ -993,6 +993,11 @@ def my_bids_view(df: pd.DataFrame) -> pd.DataFrame:
     # 정정공고로 차수가 바뀌어도 이어지도록 공고번호로 연결
     mb["bid_no"] = mb["bid_key"].str.rsplit("-", n=1).str[0]
     v = mb.merge(df.drop(columns=["bid_key"]), on="bid_no", how="left", suffixes=("", "_bid"))
+    # 값이 하나도 없는 칸은 글자형(object)으로 읽혀 계산이 깨지므로 숫자로 맞춘다
+    for c in ["amount", "sajung", "my_rank", "rec_amount", "a_value", "lower_rate", "base_amt",
+              "plan_price", "first_amt"]:
+        if c in v.columns:
+            v[c] = pd.to_numeric(v[c], errors="coerce")
     a = v["a_value"].fillna(0)
     r = v["lower_rate"] / 100
     # 금액만 적었으면 사정율 역산, 사정율만 적었으면 금액 계산

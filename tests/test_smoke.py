@@ -439,3 +439,42 @@ def test_likely_competitors(df):
     ranks = analysis.load_ranks()
     lab, comp = analysis.likely_competitors(ranks, upcoming(df).iloc[0], df)
     assert lab and not comp.empty and comp["등장"].iloc[0] >= comp["등장"].iloc[-1]
+
+
+def test_my_bids_view_with_empty_numeric_columns(df, monkeypatch):
+    """자동 발견한 우리 투찰(금액·사정율이 모두 비어 글자형으로 읽힘)이 있어도 알림이 깨지지 않아야 함."""
+    key = df["bid_key"].iloc[0]
+    fake = pd.DataFrame({"bid_key": [key], "amount": [None], "sajung": [None], "memo": [None],
+                         "my_rank": [None], "checked_at": [None], "created_at": [None],
+                         "rec_amount": [None], "amount_source": [None]}, dtype=object)
+    real = db.query_df
+    monkeypatch.setattr(db, "query_df", lambda sql, p=None: fake.copy() if sql.strip() == "SELECT * FROM my_bids" else real(sql, p))
+    v = analysis.my_bids_view(df)
+    assert len(v) == 1
+
+
+def test_orphan_rows_pruned_and_not_inserted(df):
+    """지운 공고의 개찰결과·예비가격은 다시 쌓이지 않고, 남아 있던 것도 정리됨."""
+    db.upsert_many("openings", [{"bid_key": "ZZORPHAN01-000", "participants": 5}])
+    db.upsert_many("prelim_prices", [{"bid_key": "ZZORPHAN01-000", "sno": 1, "price": 1.0, "drawn": 0}])
+    db.upsert_many("ranks", [{"bid_key": "KEPCO-K1", "rank": 1, "bizno": "1"}])
+    kept = df["bid_key"].iloc[0]
+    n_before = len(db.query_df("SELECT * FROM openings WHERE bid_key = :k", {"k": kept}))
+    assert db.prune_orphans() >= 2
+    assert db.query_df("SELECT * FROM openings WHERE bid_key = 'ZZORPHAN01-000'").empty
+    assert db.query_df("SELECT * FROM prelim_prices WHERE bid_key = 'ZZORPHAN01-000'").empty
+    assert len(db.query_df("SELECT * FROM ranks WHERE bid_key = 'KEPCO-K1'")) == 1  # 한전은 유지
+    assert len(db.query_df("SELECT * FROM openings WHERE bid_key = :k", {"k": kept})) == n_before
+
+    # 수집 단계에서 주인 없는 행은 저장하지 않음
+    import api_client
+    items = [{"bidNtceNo": "ZZORPHAN02", "bidNtceOrd": "000", "prtcptCnum": "3"},
+             {"bidNtceNo": kept.split("-")[0], "bidNtceOrd": kept.split("-")[1], "prtcptCnum": "3"}]
+    orig = api_client.call_all
+    api_client.call_all = lambda op, params: items
+    try:
+        collector._KNOWN["nos"] = None
+        collector.collect_day("openings", collector.map_opening, date(2026, 11, 21))
+    finally:
+        api_client.call_all = orig
+    assert db.query_df("SELECT * FROM openings WHERE bid_key LIKE 'ZZORPHAN02%'").empty
