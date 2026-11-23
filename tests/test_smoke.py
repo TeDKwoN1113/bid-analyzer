@@ -478,3 +478,20 @@ def test_orphan_rows_pruned_and_not_inserted(df):
     finally:
         api_client.call_all = orig
     assert db.query_df("SELECT * FROM openings WHERE bid_key LIKE 'ZZORPHAN02%'").empty
+
+
+@pytest.mark.parametrize("mode", ["🧮 투찰금액 계산", "📥 개찰결과·투찰 이력 넣기"])
+def test_kepco_page_modes_render(df, mode):
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(os.path.join(ROOT, "app.py"), default_timeout=120)
+    at.run()
+    at.sidebar.radio[0].set_value("🔌 한전 입찰").run()
+    r = [x for x in at.radio if x.key == "kepco_mode"]
+    assert r
+    r[0].set_value(mode).run()
+    assert not at.exception, [e.value for e in at.exception]
+    kinds = [x for x in at.radio if x.key == "kc_kind"]
+    for i in range(len(kinds[0].options) if kinds else 0):
+        x = [y for y in at.radio if y.key == "kc_kind"][0]
+        x.set_value(x.options[i]).run()
+        assert not at.exception, [e.value for e in at.exception]

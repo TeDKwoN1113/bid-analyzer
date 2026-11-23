@@ -889,13 +889,22 @@ elif page == "🔌 한전 입찰":
 
         def _lab(r):
             d = "" if pd.isna(r["end_dt"]) else r["end_dt"].strftime("%m/%d")
-            return f"{d} {r['name'][:40]} ({r['bid_no']})"
+            k = f"[{r['구분']}] " if "구분" in r and pd.notna(r.get("구분")) else ""
+            return f"{d} {k}{r['name'][:40]} ({r['bid_no']})"
 
         if k_mode.startswith("🧮"):
             st.subheader("🧮 한전 투찰금액 계산")
-            upk = cons[cons["end_dt"] >= nowk].sort_values("end_dt")
+            upk_all = cons[cons["end_dt"] >= nowk].sort_values("end_dt")
+            n_c = int((upk_all["구분"] == "공사").sum()) if "구분" in upk_all else 0
+            n_s = int((upk_all["구분"] == "용역").sum()) if "구분" in upk_all else 0
+            _cnt = {"공사": n_c, "용역": n_s, "전체": n_c + n_s}
+            kind_c = st.radio("구분", ["공사", "용역", "전체"], horizontal=True, key="kc_kind",
+                              format_func=lambda k: f"{k} ({_cnt[k]}건)", help="용역은 ⚙️ 설정의 '한전 용역 키워드'(기본: 광학카메라·간이 PD·콘크리트전주 "
+                                                   "내부진단)에 맞는, 마감 전 공고만 나옵니다.")
+            upk = upk_all if kind_c == "전체" or "구분" not in upk_all else upk_all[upk_all["구분"] == kind_c]
             if upk.empty:
-                st.caption("진행 중인 한전 공사 공고가 없습니다.")
+                st.caption(f"지금 마감 전인 한전 {kind_c} 공고가 없습니다. "
+                           "(용역 공고는 자주 나오지 않아요. 나오면 여기와 텔레그램 알림에 뜹니다)")
             else:
                 opt = st.selectbox("공고", upk.index, format_func=lambda i: _lab(upk.loc[i]), key="kc_bid")
                 r = upk.loc[opt]
@@ -911,6 +920,7 @@ elif page == "🔌 한전 입찰":
                     st.metric("💰 투찰금액", f"{analysis.bid_amount(base_k, s_k, lr_k, a_k):,}원")
                 if rec:
                     st.caption(f"참고 사정율 {rec['사정율']:.2f}% — 기록된 한전 개찰 결과 {rec['n']}건 기준 과거 낙찰확률 {rec['낙찰확률']:.1f}%")
+                    st.caption(f"이 공고는 **{r.get('구분', '공사')}** → 같은 종류(한전 {r.get('구분', '공사')}) 결과만 비교에 씁니다.")
                     st.warning("⚠️ 한전 용역은 우리 투찰 이력 260건으로 공정하게 시험했을 때, 이 방식(과거에 가장 많이 이긴 사정율)이 "
                                "무작위보다 낫지 않았습니다. 참고용으로만 보세요. (참가 250곳 안팎·낙찰 구간 폭 0.02%p 수준이라 "
                                "사정율 맞히기보다 경쟁사 투찰 분포를 피하는 방식이 필요 — 개찰결과(업체별 금액)가 쌓이면 다음 단계로 진행)")
