@@ -179,6 +179,16 @@ def test_kepco_mapping_and_stats(df):
     assert abs(one["sajung"] - 99.5) < 0.01 and one["winner_sajung"] > one["sajung"]
     rec = kepco.recommend(kb2, None)
     assert rec and 98 < rec["사정율"] < 102
+    # SRM 이력 엑셀 불러오기 (칸 이름 추측 + 목록에 없는 공고는 최소 정보로 추가)
+    xl = pd.DataFrame({"공고번호": ["SRM-TEST-1", "SRM-TEST-2", ""], "입찰건명": ["배전공사A", "배전공사B", "x"],
+                       "예비가격기초금액": ["100,000,000", "200,000,000", "1"], "예정가격": ["99,800,000", "201,000,000", ""],
+                       "1순위금액": ["87,700,000", "176,500,000", ""], "투찰금액": ["88,000,000", None, None]})
+    mp = kepco.guess_columns(list(xl.columns))
+    assert mp["bid_no"] == "공고번호" and mp["plan_price"] == "예정가격" and mp["first_amt"] == "1순위금액"
+    n_ok, n_skip = kepco.import_results(xl, mp)
+    assert n_ok == 2 and n_skip == 1
+    kb3 = kepco.load().set_index("bid_no")
+    assert abs(kb3.at["SRM-TEST-1", "sajung"] - 99.8) < 1e-6
 
 
 def test_plan_price_fallback_from_rate(df):

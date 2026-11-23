@@ -891,6 +891,50 @@ elif page == "🔌 한전 입찰":
             else:
                 st.caption("한전 개찰 결과가 10건 이상 기록되면 추천 사정율이 나옵니다. 그 전에는 사정율을 직접 정하세요.")
 
+        st.subheader("📥 SRM 투찰 이력 한 번에 불러오기")
+        st.caption("한전 SRM에서 우리 회사 입찰 결과(개찰 결과) 목록을 엑셀로 내려받아 올리면, "
+                   "공고마다 예정가격·1순위 금액을 한 번에 저장해서 한전 사정율·낙찰확률 분석에 씁니다.")
+        up = st.file_uploader("엑셀(xlsx·xls) 또는 CSV 파일", type=["xlsx", "xls", "csv"], key="srm_up")
+        if up is not None:
+            try:
+                if up.name.lower().endswith(".csv"):
+                    raw_up = pd.read_csv(up, encoding_errors="ignore")
+                else:
+                    raw_up = pd.read_excel(up)
+                # 제목 줄이 위에 몇 줄 있는 양식 대비: '공고번호'가 들어 있는 줄을 칸 이름으로
+                if not any("공고" in str(c) or "번호" in str(c) for c in raw_up.columns):
+                    for i in range(min(10, len(raw_up))):
+                        if raw_up.iloc[i].astype(str).str.contains("공고|입찰번호").any():
+                            raw_up.columns = raw_up.iloc[i].astype(str)
+                            raw_up = raw_up.iloc[i + 1:].reset_index(drop=True)
+                            break
+                st.caption(f"{len(raw_up):,}줄 · 앞부분 미리보기")
+                st.dataframe(raw_up.head(5), use_container_width=True)
+                guess = kepco.guess_columns(list(raw_up.columns))
+                cols_opt = ["(없음)"] + list(raw_up.columns)
+                mapping = {}
+                mcols = st.columns(2)
+                for i_, (k_, (label_, _)) in enumerate(kepco.IMPORT_FIELDS.items()):
+                    dflt = cols_opt.index(guess[k_]) if k_ in guess and guess[k_] in cols_opt else 0
+                    sel = mcols[i_ % 2].selectbox(label_, cols_opt, index=dflt, key=f"map_{k_}")
+                    if sel != "(없음)":
+                        mapping[k_] = sel
+                lr_default = st.number_input("하한율 칸이 없을 때 쓸 하한율(%)", 0.0, 100.0, 87.745, 0.001, format="%.3f")
+                if "bid_no" not in mapping or "plan_price" not in mapping:
+                    st.warning("최소한 '공고번호'와 '예정가격' 칸은 골라야 합니다.")
+                elif st.button("불러오기", type="primary", key="srm_import"):
+                    n_ok, n_skip = kepco.import_results(raw_up, mapping, lr_default)
+                    st.cache_data.clear()
+                    matched = len(set(raw_up[mapping["bid_no"]].astype(str).str.strip())
+                                  & set(kb_all["bid_no"].astype(str)))
+                    st.success(f"{n_ok:,}건 저장 (예정가격 없는 줄 {n_skip:,}건 건너뜀) · "
+                               f"한전 공고 목록과 공고번호가 맞은 것 {matched:,}건")
+                    if n_ok and matched == 0:
+                        st.info("공고번호 형식이 한전 API와 다를 수 있어요. 이 화면을 캡처해 보내주시면 맞춰 드릴게요. "
+                                "기초금액 칸이 있으면 공고번호가 안 맞아도 사정율은 계산됩니다.")
+            except Exception as e:  # noqa: BLE001
+                st.error(f"파일을 읽지 못했습니다: {e}")
+
         st.subheader("📝 한전 개찰 결과 기록")
         st.caption("SRM에서 개찰 결과(예정가격·1순위 금액)를 보고 적어 두면, 한전 사정율·낙찰확률 분석에 쓰입니다. "
                    "우리가 참가하지 않은 공고도 결과를 볼 수 있으면 적어 주세요. 많을수록 정확해집니다.")

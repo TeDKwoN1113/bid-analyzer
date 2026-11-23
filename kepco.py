@@ -235,6 +235,77 @@ def _prepare(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# ---------------- SRM 투찰 이력 불러오기 ----------------
+# 엑셀 칸 이름 추측용 (SRM 내려받기 양식이 바뀌어도 사용자가 화면에서 고를 수 있음)
+IMPORT_FIELDS = {
+    "bid_no": ("공고번호", ["공고번호", "입찰번호", "공고 번호", "bid"]),
+    "name": ("공고명(선택)", ["공고명", "입찰건명", "건명", "공사명"]),
+    "base_amt": ("기초금액/예비가격기초금액(선택)", ["예비가격기초", "기초금액", "기초"]),
+    "plan_price": ("예정가격", ["예정가격", "예가"]),
+    "first_amt": ("1순위(낙찰) 금액", ["1순위", "낙찰금액", "최저", "낙찰가"]),
+    "lower_rate": ("낙찰하한율(선택)", ["하한율", "하한"]),
+    "participants": ("참가업체 수(선택)", ["참가업체", "참가수", "업체수", "투찰업체"]),
+    "our_amount": ("우리 투찰금액(선택)", ["투찰금액", "우리", "당사", "입찰금액"]),
+    "our_rank": ("우리 순위(선택)", ["순위"]),
+    "open_dt": ("개찰일(선택)", ["개찰일", "개찰일시", "개찰"]),
+}
+
+
+def guess_columns(cols) -> dict:
+    """엑셀 칸 이름으로 항목 추측 {항목: 칸이름}."""
+    out, used = {}, set()
+    for key, (_, words) in IMPORT_FIELDS.items():
+        for w in words:
+            hit = next((c for c in cols if c not in used and w in str(c).replace(" ", "")), None)
+            if hit is not None:
+                out[key] = hit
+                used.add(hit)
+                break
+    return out
+
+
+def import_results(df_in: pd.DataFrame, mapping: dict, default_lr: float = 87.745) -> tuple[int, int]:
+    """SRM 이력(엑셀) → kepco_results 저장. 공고가 한전 공고 목록에 없으면 최소 정보로 추가. (저장 건수, 건너뛴 건수)"""
+    def col(k):
+        c = mapping.get(k)
+        return df_in[c] if c in df_in else pd.Series([None] * len(df_in), index=df_in.index)
+
+    def nums(x):
+        return pd.to_numeric(x.astype(str).str.replace(r"[^\d.\-]", "", regex=True), errors="coerce")
+    no = col("bid_no").astype(str).str.strip()
+    plan, first = nums(col("plan_price")), nums(col("first_amt"))
+    base, lr = nums(col("base_amt")), nums(col("lower_rate")).fillna(default_lr)
+    part, ours, rank = nums(col("participants")), nums(col("our_amount")), nums(col("our_rank"))
+    name = col("name")
+    opened = pd.to_datetime(col("open_dt"), errors="coerce", format="mixed")
+    have = set(db.query_df("SELECT bid_no FROM kepco_bids")["bid_no"])
+    res, bids, skipped = [], [], 0
+    for i in df_in.index:
+        b = no[i]
+        if not b or b.lower() in ("nan", "none") or pd.isna(plan[i]) or plan[i] <= 0:
+            skipped += 1
+            continue
+        res.append({"bid_no": b, "plan_price": float(plan[i]),
+                    "first_amt": None if pd.isna(first[i]) else float(first[i]),
+                    "lower_rate": float(lr[i]), "a_value": 0.0,
+                    "participants": None if pd.isna(part[i]) else int(part[i]),
+                    "our_amount": None if pd.isna(ours[i]) else float(ours[i]),
+                    "our_rank": None if pd.isna(rank[i]) else int(rank[i]),
+                    "memo": "SRM 이력 불러오기", "created_at": db.now()})
+        if b not in have:
+            bids.append({"bid_no": b, "company": "COM01", "name": None if pd.isna(name[i]) else str(name[i]),
+                         "item_type": "Construction", "purchase_type": "ConstructionService",
+                         "base_amt": None if pd.isna(base[i]) else float(base[i]),
+                         "end_dt": None if pd.isna(opened[i]) else opened[i].strftime("%Y-%m-%d %H:%M:%S"),
+                         "progress": "Final", "updated_at": db.now()})
+        elif not pd.isna(base[i]):
+            db.execute("UPDATE kepco_bids SET base_amt = :a WHERE bid_no = :n AND base_amt IS NULL",
+                       {"a": float(base[i]), "n": b})
+    db.upsert_many("kepco_bids", bids)
+    db.upsert_many("kepco_results", res)
+    return len(res), skipped
+
+
 def recommend(df: pd.DataFrame, row, region: str | None = None) -> dict | None:
     """기록된 한전 개찰 결과로 사정율별 낙찰확률을 계산해 추천 (나라장터와 같은 방식). 10건 미만이면 None."""
     import analysis
