@@ -494,7 +494,9 @@ def verify_limits(progress=None, max_bids: int = 150) -> str:
     n_grp = 0
     if not stopped:
         has_lic = t[(t["licenses"] != "") & ~t["bid_no"].map(lambda b: (b, "licenses_grp") in done).astype(bool)]
-        for bid_no, bid_ord in has_lic[["bid_no", "bid_ord"]].head(max_bids).itertuples(index=False):
+        # 지금 '참가 가능'으로 보이는 공고, 마감이 가까운 공고부터
+        has_lic = has_lic.assign(_el=analysis.eligible(has_lic)).sort_values(["_el", "open_date"], ascending=[False, True])
+        for bid_no, bid_ord in has_lic[["bid_no", "bid_ord"]].head(max_bids * 3).itertuples(index=False):
             try:
                 items = []
                 for o in dict.fromkeys([str(bid_ord or "000"), "000"]):
