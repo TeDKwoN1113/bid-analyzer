@@ -169,7 +169,9 @@ def _build_dataset() -> pd.DataFrame:
     df["participants"] = df["participants_open"].where(df["participants_open"] > 0,
                                                        df["participants_final"])
     # 기관별 과거 참가업체 수: 공공 공사는 보통 수백 곳 → 늘 소수만 들어오는 기관은 협력업체 등록 등 별도 자격 필요로 봄
-    pp = df[df["participants"] > 0]
+    # (수의계약은 원래 1~2곳이라 빼고, 일반·제한경쟁 공고만으로 판단)
+    cm = df["contract_method"].fillna("")
+    pp = df[(df["participants"] > 0) & cm.str.contains("일반경쟁|제한경쟁", regex=True)]
     og = pp.groupby("org")["participants"].agg(["median", "size"])
     df["org_part_median"] = df["org"].map(og["median"])
     df["org_part_n"] = df["org"].map(og["size"]).fillna(0)
@@ -327,8 +329,11 @@ def limit_reasons(df: pd.DataFrame) -> pd.Series:
         add(perf, "실적제한")
     if "pq" in df:
         add(df["pq"].fillna("") == "Y", "PQ심사")
-    if "designated" in df:
-        add(df["designated"].fillna("") == "Y", "지명경쟁")
+    if "designated" in df or "contract_method" in df:
+        des = (df["designated"].fillna("") == "Y") if "designated" in df else pd.Series(False, index=df.index)
+        if "contract_method" in df:
+            des |= df["contract_method"].fillna("").str.contains("지명", regex=False)
+        add(des, "지명경쟁")
     if "ability_list" in df and ability > 0:
         need = df["ability_list"].map(_ability_needed)
         add(need.notna() & (need > ability), "시공능력 부족")
@@ -337,6 +342,8 @@ def limit_reasons(df: pd.DataFrame) -> pd.Series:
     if "org_part_median" in df:
         allow = [x.strip() for x in (db.get_kv("allow_orgs", "") or "").split(",") if x.strip()]
         few = (df["org_part_n"].fillna(0) >= 3) & (df["org_part_median"] <= SMALL_ORG_PARTICIPANTS)
+        if "contract_method" in df:   # 수의계약 공고 자체는 이 기준으로 판단하지 않음
+            few &= df["contract_method"].fillna("").str.contains("경쟁", regex=False) | (df["contract_method"].fillna("") == "")
         if allow:
             few &= ~df["org"].fillna("").map(lambda o: any(x in o for x in allow))
         add(few, "소수 참가 기관(협력업체 등록 등 별도 자격 추정)")
