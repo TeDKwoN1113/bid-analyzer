@@ -540,3 +540,12 @@ def test_refresh_my_results_fills_rank_and_plan(df, monkeypatch):
     assert int(m["my_rank"]) == 2 and float(m["amount"]) == 1001
     assert len(db.query_df("SELECT * FROM plans WHERE bid_key = :k", {"k": key})) == 1
     db.execute("DELETE FROM my_bids WHERE bid_key = :k", {"k": key})
+
+
+def test_regional_joint_contract_excluded_outside_our_region(monkeypatch):
+    """지역의무공동도급(예: 부산 현장 49%)은 다른 지역이면 제외, 우리 지역 현장이면 포함."""
+    monkeypatch.setattr(db, "company", lambda: {"bizno": "", "region": "울산", "licenses": ["전기공사업"]})
+    d = pd.DataFrame({"name": ["청룡초 전기공사", "울산 학교 전기공사", "부산 일반"], "joint_duty": ["Y", "Y", "N"],
+                      "region": ["부산광역시", "울산광역시 남구", "부산광역시"]})
+    r = analysis.limit_reasons(d)
+    assert "지역의무공동도급" in r.iloc[0] and r.iloc[1] == "" and r.iloc[2] == ""

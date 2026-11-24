@@ -1318,6 +1318,10 @@ elif page == "⚙️ 설정 · API 점검":
     cperf = ca2.checkbox("실적제한 공고도 참가 가능으로 보기 (해당 실적이 있을 때만)",
                          value=db.get_kv("allow_perf_limit", "0") == "1",
                          help="끄면 실적경쟁·'실적 및 기술자 보유' 공고는 참가 가능 목록과 알림에서 뺍니다.")
+    cjd = st.checkbox("지역의무공동도급 공고(다른 지역 현장)도 참가 가능으로 보기 — 그 지역 업체와 공동도급할 때만",
+                      value=db.get_kv("allow_joint_duty", "0") == "1",
+                      help="예: 부산 현장 + 지역의무공동도급 49% → 부산 업체와 손잡아야 참가 가능. 끄면 목록·알림에서 뺍니다. "
+                           "우리 지역(울산) 현장은 항상 포함.")
     import kepco as _kp
     ksv = st.text_input("한전 용역 키워드 (쉼표 구분 — 이 단어가 공고명에 있는 한전 용역만 알림·분석)",
                         ", ".join(_kp.service_keywords()))
@@ -1325,6 +1329,7 @@ elif page == "⚙️ 설정 · API 점검":
         db.set_kv("kepco_service_keywords", ksv.strip())
         db.set_kv("company_ability", f"{cabil:.0f}" if cabil else "")
         db.set_kv("allow_perf_limit", "1" if cperf else "0")
+        db.set_kv("allow_joint_duty", "1" if cjd else "0")
         db.set_kv("qual_max_est", qlim.strip())
         db.set_kv("company_name", cname.strip())
         db.set_kv("company_bizno", cbiz.strip().replace("-", ""))

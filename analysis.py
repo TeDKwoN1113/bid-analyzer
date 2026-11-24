@@ -320,6 +320,13 @@ def limit_reasons(df: pd.DataFrame) -> pd.Series:
     if "ability_list" in df and ability > 0:
         need = df["ability_list"].map(_ability_needed)
         add(need.notna() & (need > ability), "시공능력 부족")
+    # 지역의무공동도급: 공사 현장 지역 업체와 반드시 공동도급 (예: 부산 공사 → 부산 업체 49% 이상 + 전국 업체)
+    # 우리 지역 공사면 우리가 지역 업체라 문제없음. 다른 지역이면 그 지역 업체와 손잡아야 해서 기본은 제외.
+    if "joint_duty" in df and db.get_kv("allow_joint_duty", "0") != "1":
+        reg = db.company()["region"] or ""
+        site = df["region"].fillna("") if "region" in df else pd.Series("", index=df.index)
+        jd = (df["joint_duty"].fillna("") == "Y") & ~(site.str.contains(reg, regex=False) if reg else False)
+        add(jd, "지역의무공동도급(현장 지역 업체와 공동도급 필요)")
     return out
 
 
