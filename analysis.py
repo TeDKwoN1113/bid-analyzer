@@ -168,6 +168,11 @@ def _build_dataset() -> pd.DataFrame:
     df["a_value"] = df["a_value"].fillna(0)
     df["participants"] = df["participants_open"].where(df["participants_open"] > 0,
                                                        df["participants_final"])
+    # 기관별 과거 참가업체 수: 공공 공사는 보통 수백 곳 → 늘 소수만 들어오는 기관은 협력업체 등록 등 별도 자격 필요로 봄
+    pp = df[df["participants"] > 0]
+    og = pp.groupby("org")["participants"].agg(["median", "size"])
+    df["org_part_median"] = df["org"].map(og["median"])
+    df["org_part_n"] = df["org"].map(og["size"]).fillna(0)
     # 1순위 = 개찰 1순위(개찰 직후 공개), 없으면 최종 낙찰자
     df["first_company"] = df["first_company"].fillna(df["winner"])
     df["first_amt"] = df["first_amt"].fillna(df["win_amt"])
@@ -298,6 +303,9 @@ def _ability_needed(x) -> float | None:
     return max(nums) if nums else None
 
 
+SMALL_ORG_PARTICIPANTS = 30   # 기관 과거 참가업체 중앙값이 이 이하이면 별도 자격 기관으로 봄
+
+
 def limit_reasons(df: pd.DataFrame) -> pd.Series:
     """우리가 못 들어가는 이유(실적제한·PQ·지명경쟁·시공능력 부족). 없으면 ''. 회사 설정으로 일부 허용 가능."""
     out = pd.Series("", index=df.index, dtype=object)
@@ -324,6 +332,17 @@ def limit_reasons(df: pd.DataFrame) -> pd.Series:
     if "ability_list" in df and ability > 0:
         need = df["ability_list"].map(_ability_needed)
         add(need.notna() & (need > ability), "시공능력 부족")
+    # 소수 참가 기관: 과거 공고(3건 이상)에 늘 30곳 이하만 참가 → 협력업체 등록 등 별도 자격이 있는 기관으로 추정
+    # (2026-11-24 대표 확인: 이런 공고는 못 넣음). 설정의 '참가 가능 기관'에 넣으면 제외하지 않음.
+    if "org_part_median" in df:
+        allow = [x.strip() for x in (db.get_kv("allow_orgs", "") or "").split(",") if x.strip()]
+        few = (df["org_part_n"].fillna(0) >= 3) & (df["org_part_median"] <= SMALL_ORG_PARTICIPANTS)
+        if allow:
+            few &= ~df["org"].fillna("").map(lambda o: any(x in o for x in allow))
+        add(few, "소수 참가 기관(협력업체 등록 등 별도 자격 추정)")
+    block = [x.strip() for x in (db.get_kv("block_orgs", "") or "").split(",") if x.strip()]
+    if block and "org" in df:
+        add(df["org"].fillna("").map(lambda o: any(x in o for x in block)), "제외 기관(설정)")
     # 지역의무공동도급: 공사 현장 지역 업체와 반드시 공동도급 (예: 부산 공사 → 부산 업체 49% 이상 + 전국 업체)
     # 우리 지역 공사면 우리가 지역 업체라 문제없음. 다른 지역이면 그 지역 업체와 손잡아야 해서 기본은 제외.
     if "joint_duty" in df and db.get_kv("allow_joint_duty", "0") != "1":

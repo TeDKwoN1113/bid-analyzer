@@ -572,3 +572,17 @@ def test_parse_single_item_body_and_d2b_lists():
     tb = d2b.map_notice({"pblancNo": "X1", "orntCode": "UMM", "pblancOdr": 1, "baseAmnt": 2.5e8, "cntrwkNm": "전기공사"},
                         items[0])
     assert tb["regions"][0]["region"] == "[19] 충청남도" and tb["bids"][0]["lower_rate"] == 89.745
+
+
+def test_small_participation_orgs_excluded(monkeypatch):
+    """늘 소수만 참가하는 기관(협력업체 등록 등)은 못 넣는 공고로 제외. 설정으로 허용 가능."""
+    monkeypatch.setattr(db, "company", lambda: {"bizno": "", "region": "울산", "licenses": ["전기공사업"]})
+    d = pd.DataFrame({"name": ["a", "b"], "org": ["중소기업은행", "울산광역시"], "org_part_median": [11, 350],
+                      "org_part_n": [20, 50]})
+    r = analysis.limit_reasons(d)
+    assert "소수 참가 기관" in r.iloc[0] and r.iloc[1] == ""
+    db.set_kv("allow_orgs", "기업은행")
+    try:
+        assert analysis.limit_reasons(d).iloc[0] == ""
+    finally:
+        db.set_kv("allow_orgs", "")

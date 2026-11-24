@@ -148,15 +148,22 @@ def participant_analysis(done: pd.DataFrame) -> None:
                                                     공고당무작위확률=("participants", lambda x: (1 / x[x > 0]).mean() * 100))
     print(p.round(2).to_string())
     print("공고당무작위확률(%) = 아무렇게나 넣어도 1순위가 될 확률. 이 값이 큰 공고일수록 같은 노력으로 더 많이 이김.")
-    few = done[done["participants"].between(1, 30)]
+    few = small_org_bids()
     if len(few):
-        print(f"\n참가 30곳 이하 공고 {len(few)}건 — 어떤 기관·공고인가 (기회인지, 실제로는 못 넣는 공고인지 판단용)")
+        print(f"\n'소수 참가 기관'으로 제외되는 공고 {len(few)}건 — 기관 목록 (설정의 '참가 가능 기관'으로 되살릴 수 있음)")
         t = few.groupby("org").agg(공고=("bid_key", "size"), 참가중앙=("participants", "median"),
                                    기초중앙_백만=("base_amt", lambda x: round(x.median() / 1e6)),
                                    계약방법=("contract_method", lambda x: x.mode().iat[0] if len(x.mode()) else ""),
                                    공사지역=("region", lambda x: str(x.mode().iat[0])[:12] if len(x.mode()) else ""))
         print(t.sort_values("공고", ascending=False).head(15).to_string())
         print("예시 공고명:", " / ".join(few.sort_values("open_date", ascending=False)["name"].astype(str).str[:30].head(8)))
+
+
+def small_org_bids() -> pd.DataFrame:
+    df = analysis.load_dataset()
+    d = analysis.apply_filters(df[df["open_date"].notna()], keywords=analysis.company_keywords())
+    r = analysis.limit_reasons(d)
+    return d[r.str.contains("소수 참가", regex=False)]
 
 
 def main() -> None:
