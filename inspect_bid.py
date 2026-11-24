@@ -105,6 +105,19 @@ def d2b_selftest(n: int = 4) -> None:
         except Exception as e:  # noqa: BLE001
             print("  상세 오류", str(e)[:120])
             continue
+        if x is small[0]:
+            print("  [목록 항목 키]", sorted(x.keys()))
+            print("  [상세 요청]", p_)
+            try:
+                import requests
+                from config import load_settings as _ls
+                rr = requests.get(f"{d2b.BID}/getFcltyCmpetBidPblancDetail",
+                                  params={"serviceKey": _ls()["service_key"], "type": "json", "_type": "json",
+                                          "pageNo": 1, "numOfRows": 10, **{k: v for k, v in p_.items() if v}}, timeout=40)
+                print("  [상세 원본]", rr.text[:1500].replace(_ls()["service_key"], "***"))
+            except Exception as e:  # noqa: BLE001
+                print("  [상세 원본 오류]", e)
+        print("  [상세 항목 수]", len(det), sorted(det.keys())[:60])
         key = d2b.keys(x)[0] if hasattr(d2b, "keys") else ""
         print(f"\n[{x.get('cntrwkNm')}] 기초 {d2b._num(x.get('baseAmnt')) or 0:,.0f} · 공사지역 {det.get('cntrwkLc') or det.get('lc')}")
         print("  areaLmttList:", repr(det.get("areaLmttList"))[:300], "| lcnsLmttList:", repr(det.get("lcnsLmttList"))[:200])
