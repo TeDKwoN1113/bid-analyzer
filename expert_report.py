@@ -152,10 +152,13 @@ def participant_analysis(done: pd.DataFrame) -> None:
     if len(few):
         print(f"\n'소수 참가 기관'으로 제외되는 공고 {len(few)}건 — 기관 목록 (설정의 '참가 가능 기관'으로 되살릴 수 있음)")
         t = few.groupby("org").agg(공고=("bid_key", "size"), 참가중앙=("participants", "median"),
-                                   기초중앙_백만=("base_amt", lambda x: round(x.median() / 1e6)),
+                                   기초중앙_백만=("base_amt", lambda x: x.median() / 1e6),
                                    계약방법=("contract_method", lambda x: x.mode().iat[0] if len(x.mode()) else ""),
                                    공사지역=("region", lambda x: str(x.mode().iat[0])[:12] if len(x.mode()) else ""))
-        print(t.sort_values("공고", ascending=False).head(15).to_string())
+        t["기초중앙_백만"] = t["기초중앙_백만"].round(0)
+        print(t.sort_values("공고", ascending=False).head(40).to_string())
+        loc = few[few["region"].fillna("").str.contains(db.company()["region"] or "울산", regex=False)]
+        print(f"그중 공사지역이 우리 지역인 공고 {len(loc)}건 · 기관:", ", ".join(loc["org"].value_counts().head(15).index))
         print("예시 공고명:", " / ".join(few.sort_values("open_date", ascending=False)["name"].astype(str).str[:30].head(8)))
 
 
