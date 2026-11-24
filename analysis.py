@@ -121,9 +121,21 @@ def _build_dataset() -> pd.DataFrame:
             t = t.assign(_no=t["bid_key"].str.rsplit("-", n=1).str[0],
                          _ord=pd.to_numeric(t["bid_key"].str.rsplit("-", n=1).str[1], errors="coerce").fillna(0))
             t = t[t["_ord"] == t.groupby("_no")["_ord"].transform("max")]
+            if table == "licenses":
+                grp = t[col].str.extract(r"^\[G([^\]]*)\]\s*", expand=False)
+                clean = t[col].str.replace(r"^\[G[^\]]*\]\s*", "", regex=True)
+                t = t.assign(**{col: clean, "_grp": grp})
+                # 면허 묶음: 같은 묶음 안 면허는 모두 있어야, 다른 묶음끼리는 하나만 맞으면 참가 가능
+                # (예전 자료처럼 묶음 번호가 없으면 면허마다 따로 묶음 = 하나만 맞으면 됨)
+                t = t.assign(_grp=t["_grp"].fillna("x" + t[col]))
+                groups = t.groupby("_no").apply(
+                    lambda g: tuple(tuple(sorted(set(v))) for _, v in g.groupby("_grp")[col]), include_groups=False)
+                df["license_groups"] = df["bid_no"].map(groups)
             joined = t.groupby("_no")[col].agg(lambda x: ", ".join(sorted(set(x))))
         else:
             joined = pd.Series(dtype=str)
+            if table == "licenses":
+                df["license_groups"] = None
         df[out] = df["bid_no"].map(joined).fillna("")
         # 그 공고 등록일의 자료를 받았거나 공고번호로 직접 확인했으면 '확인됨' (빈 값 = 제한 없음)
         days = db.done_days(table)
@@ -232,12 +244,44 @@ def eligible(df: pd.DataFrame, company_region: str | None = None,
               (~known & place.str.contains(reg, regex=False))
     if lic and "licenses" in df:
         has = df["licenses"] != ""
-        ok &= ~has | df["licenses"].str.contains("|".join(map(re.escape, lic)), regex=True)
+        simple = df["licenses"].str.contains("|".join(map(re.escape, lic)), regex=True)
+        if "license_groups" in df:
+            grp = df["license_groups"]
+            has_grp = grp.map(lambda x: isinstance(x, tuple) and len(x) > 0)
+            by_grp = pd.Series([license_ok(x, lic) if h else True for x, h in zip(grp, has_grp)], index=df.index)
+            ok &= ~has | (has_grp & by_grp) | (~has_grp & simple)
+        else:
+            ok &= ~has | simple
     if "method" in df:
         # 수의시담: 발주기관이 정한 업체와 협상하는 수의계약 → 우리가 자유롭게 참가할 수 없음
         ok &= ~df["method"].fillna("").str.contains("수의시담", regex=False)
     ok &= ~limit_reasons(df).astype(bool)
     return ok
+
+
+def _lic_core(x: str) -> str:
+    """'전기공사업/0037' → '전기공사업' (코드·공백 제거해서 비교)."""
+    return re.sub(r"/\d+$", "", x.strip()).replace(" ", "")
+
+
+def license_ok(groups, company_licenses: list[str]) -> bool:
+    """면허제한 묶음 판단: 어떤 묶음 하나의 면허를 '모두' 가지고 있으면 참가 가능.
+
+    한 항목에 허용업종 목록('[...]')이 붙어 있으면 그중 하나만 있어도 그 항목은 충족."""
+    if not groups:
+        return True
+    mine = [_lic_core(x) for x in company_licenses if x]
+    if not mine:
+        return True
+
+    def entry_ok(e: str) -> bool:
+        alts = [e.split(" [")[0]] + re.findall(r"[^\[\],]+", e[len(e.split(" [")[0]):])
+        for alt in alts:
+            core = _lic_core(alt)
+            if core and any(m in core or core in m for m in mine):
+                return True
+        return False
+    return any(all(entry_ok(e) for e in g) for g in groups)
 
 
 # 공고명에 실적·기술자 보유 조건이 적힌 경우 (예: ★기술자 및 실적보유★, ★전차선실적및기술자보유★, [실적제한])

@@ -107,6 +107,9 @@ def map_license(r: dict):
     name = g(r, "lcnsLmtNm", "indstrytyNm", "lcnsNm")
     extra = g(r, "permsnIndstrytyList", default="")
     text = " ".join(x for x in (name, extra) if x)
+    grp = g(r, "lmtGrpNo", default="")
+    if text and grp:
+        text = f"[G{grp}] {text}"   # 면허 묶음 번호 (같은 묶음 = 모두 필요)
     return [("licenses", {"bid_key": key_of(r), "license": text[:2000]})] if text and _is_cnstwk(r) else []
 
 
@@ -487,7 +490,30 @@ def verify_limits(progress=None, max_bids: int = 150) -> str:
             n_rows += len(rows)
         if stopped and "한도" in stopped:
             break
-    msg = f"공고번호로 지역·면허 재확인 {n_bid}건 (찾은 제한 {n_rows}건) {stopped}"
+    # 면허 묶음 번호(같은 묶음 = 모두 필요)가 없는 예전 자료: 개찰 전 공고만 공고번호로 다시 받아 묶음까지 저장
+    n_grp = 0
+    if not stopped:
+        has_lic = t[(t["licenses"] != "") & ~t["bid_no"].map(lambda b: (b, "licenses_grp") in done).astype(bool)]
+        for bid_no, bid_ord in has_lic[["bid_no", "bid_ord"]].head(max_bids).itertuples(index=False):
+            try:
+                items = []
+                for o in dict.fromkeys([str(bid_ord or "000"), "000"]):
+                    items = api_client.call_all("licenses", {"inqryDiv": s["inqry_div_bidno"].get("licenses", "2"),
+                                                             "bidNtceNo": bid_no, "bidNtceOrd": o})
+                    if items:
+                        break
+            except api_client.QuotaError as e:
+                stopped = str(e)
+                break
+            except api_client.ApiError:
+                continue
+            rows = [row for r in items for _, row in map_license(r) if row.get("bid_key")]
+            if rows:
+                db.execute("DELETE FROM licenses WHERE bid_key LIKE :k", {"k": f"{bid_no}-%"})
+                db.upsert_many("licenses", rows)
+            db.upsert_many("limit_checks", [{"bid_no": bid_no, "op": "licenses_grp", "n": len(rows), "checked_at": db.now()}])
+            n_grp += 1
+    msg = f"공고번호로 지역·면허 재확인 {n_bid}건 (찾은 제한 {n_rows}건) · 면허 묶음 다시 받기 {n_grp}건 {stopped}"
     db.log("지역·면허 재확인", "-", n_rows, msg)
     if progress:
         progress(msg)

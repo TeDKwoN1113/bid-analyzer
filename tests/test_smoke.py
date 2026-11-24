@@ -495,3 +495,22 @@ def test_kepco_page_modes_render(df, mode):
         x = [y for y in at.radio if y.key == "kc_kind"][0]
         x.set_value(x.options[i]).run()
         assert not at.exception, [e.value for e in at.exception]
+
+
+def test_license_groups_need_all_in_group():
+    """같은 묶음의 면허는 모두 있어야 함 (예: 승강기 교체공사 = 전기 + 승강기공사업 + 승강기 제조업 …)."""
+    r = {"bidNtceNo": "R26BK01818339", "bidNtceOrd": "000", "lmtGrpNo": "1", "lcnsLmtNm": "승강기 제조업/6876",
+         "permsnIndstrytyList": "", "bsnsDivNm": "공사"}
+    rows = collector.map_license(r)
+    assert rows and rows[0][1]["license"].startswith("[G1] ")
+    elevator = (("승강기 유지관리업(중저속 승강기)/6881 [승강기 유지관리업(고속 승강기)/6880]", "승강기 제조업/6876",
+                 "승강기ㆍ삭도공사업/6201", "전기공사업/0037"),)
+    assert not analysis.license_ok(elevator, ["전기공사업"])
+    assert analysis.license_ok((("전기공사업/0037",), ("정보통신공사업/0036",)), ["전기공사업"])
+    assert analysis.license_ok((("정보통신공사업/0036 [전기공사업/0037]",),), ["전기공사업"])
+    assert not analysis.license_ok((("정보통신공사업/0036",),), ["전기공사업"])
+    df = pd.DataFrame({"bid_key": ["A-000", "B-000"], "licenses": ["x", "y"], "license_groups": [elevator, (("전기공사업/0037",),)],
+                       "allowed_regions": ["", ""], "allowed_regions_known": [True, True], "region": ["", ""], "org": ["", ""],
+                       "demand_org": ["", ""], "method": ["", ""], "name": ["승강기 교체", "전기공사"]})
+    ok = analysis.eligible(df, company_region="울산", company_licenses=["전기공사업"])
+    assert list(ok) == [False, True]
