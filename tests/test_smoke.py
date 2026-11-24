@@ -595,3 +595,10 @@ def test_small_org_in_our_region_kept(monkeypatch):
                       "org_part_median": [5, 6], "org_part_n": [13, 21], "contract_method": ["제한경쟁", "제한경쟁"]})
     r = analysis.limit_reasons(d)
     assert r.iloc[0] == "" and "소수 참가" in r.iloc[1]
+
+
+def test_lowest_price_bids_flagged():
+    d = pd.DataFrame({"method": ["최저가낙찰제-최저가낙찰자", "적격심사제", "적격심사제"],
+                      "contract_method": ["제한경쟁", "일반경쟁", "제한경쟁"],
+                      "org_part_median": [300, 400, 5], "org_part_n": [10, 10, 13]})
+    assert list(analysis.lowest_price(d)) == [True, False, True]

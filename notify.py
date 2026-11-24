@@ -215,7 +215,9 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
                          f"  {'기초' if pd.notna(r['base_amt']) else '추정'} {_won(amt)} | "
                          f"개찰 {_dt(r['open_dt'])} | {_e(r['contract_method'] or r['method'])}"
                          + (f"\n  ⛔ 참가등록 마감 {_dt(r['qual_dt'])} (국방전자조달)" if analysis.is_d2b(r["bid_key"])
-                            and pd.notna(pd.to_datetime(r.get('qual_dt'), errors='coerce', format='mixed')) else ""))
+                            and pd.notna(pd.to_datetime(r.get('qual_dt'), errors='coerce', format='mixed')) else "")
+                         + ("\n  💲 최저가 내역서 입찰 (내역서·도면 검토 후 견적)" if bool(analysis.lowest_price(pd.DataFrame([r])).iloc[0])
+                            else ""))
             keys.append((r["bid_key"], "new"))
         _more(lines, len(new))
         parts.append("\n".join(lines))
@@ -230,8 +232,12 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
             av = f" | A값 {_won(r['a_value'])}" if r["a_value"] else ""
             line = (f"• {_title(r)}\n  {_e(r['org'])} | 개찰 {_dt(r['open_dt'])}\n"
                     f"  기초금액 {_won(r['base_amt'])} | 하한율 {lr}{av}")
-            pk = analysis.pick_bid(df, r, analysis.bid_keywords(r), prev=analysis.prev_pick(phist, r["bid_key"]))
-            if pk:
+            is_lp = bool(analysis.lowest_price(pd.DataFrame([r])).iloc[0])
+            pk = None if is_lp else analysis.pick_bid(df, r, analysis.bid_keywords(r),
+                                                      prev=analysis.prev_pick(phist, r["bid_key"]))
+            if is_lp:
+                line += f"\n  💲 {_e(analysis.LOWEST_NOTE)}"
+            elif pk:
                 badge = {"높음": "🟢", "보통": "🟡", "낮음": "🔴"}[pk["신뢰도"]]
                 qok, qmsg = pk.get("적격심사") or (None, "")
                 if qok is False:

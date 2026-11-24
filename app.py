@@ -381,6 +381,8 @@ if page == "🏠 오늘의 투찰":
             qd = pd.to_datetime(r.get("qual_dt"), errors="coerce", format="mixed") if analysis.is_d2b(r["bid_key"]) else pd.NaT
             if analysis.is_d2b(r["bid_key"]):
                 st.caption("🪖 국방전자조달(d2b.go.kr) 공고 — 입찰참가등록을 해야 투찰할 수 있어요")
+            if bool(analysis.lowest_price(pd.DataFrame([r])).iloc[0]):
+                st.markdown(f":orange[**💲 {analysis.LOWEST_NOTE}**]")
             if pd.notna(qd):
                 left = (qd.normalize() - now.normalize()).days
                 txt = f"참가등록 마감 {qd.strftime('%m/%d %H:%M')}"
@@ -408,6 +410,9 @@ if page == "🏠 오늘의 투찰":
                      f"{'' if not a_val else ' · A값 ' + won(a_val)}")
             pc_min = analysis.pure_cost_min(r)
             st.caption(a_value_text(r) + (f" · 순공사원가 98% 하한 {pc_min:,}원" if pc_min else ""))
+            if bool(analysis.lowest_price(pd.DataFrame([r])).iloc[0]):
+                st.caption("💲 최저가 내역서 입찰이라 사정율 추천 금액은 표시하지 않습니다. 위 첨부(내역서·도면)를 검토해 견적을 내세요.")
+                continue
             if pd.isna(r["lower_rate"]):
                 st.warning("하한율 정보가 없어 투찰금액을 계산할 수 없습니다. 공고문을 확인하세요.")
                 continue

@@ -226,6 +226,22 @@ def is_d2b(key) -> bool:
     return str(key or "").startswith("D2B")
 
 
+LOWEST_NOTE = ("최저가 내역서 입찰 — 사정율 추천이 맞지 않음. 내역서·도면을 검토해 견적(원가+최소 이윤)을 "
+               "산출하고, 가장 낮은 금액이 낙찰")
+
+
+def lowest_price(df: pd.DataFrame) -> pd.Series:
+    """최저가로 낙찰자를 정하는 공고: 계약방법에 '최저가'가 있거나, 늘 소수만 참가하는 기관(대학·민간 등 —
+    울산이면 참가 가능하지만 최저가 입찰, 2026-11-24 대표 확인)의 경쟁입찰."""
+    txt = df["method"].fillna("").astype(str) + " " + df["contract_method"].fillna("").astype(str) \
+        if "method" in df and "contract_method" in df else pd.Series("", index=df.index)
+    lp = txt.str.contains("최저가", regex=False)
+    if "org_part_median" in df and "org_part_n" in df:
+        lp |= (df["org_part_n"].fillna(0) >= 3) & (df["org_part_median"] <= SMALL_ORG_PARTICIPANTS) & \
+            txt.str.contains("경쟁", regex=False)
+    return lp
+
+
 def reg_deadline(df: pd.DataFrame) -> pd.Series:
     """입찰참가등록 마감 — 국방 공고만 의미 있음 (나라장터는 공고별 참가등록이 사실상 없음)."""
     if "qual_dt" not in df:
@@ -1242,6 +1258,7 @@ def backtest(df: pd.DataFrame, keywords, test_days: int = 90, max_tests: int = 3
     done = done[done["winner_sajung"] >= done["sajung"]].sort_values("open_date")
     tests = apply_filters(done, keywords=keywords, eligible_only=eligible_only)
     tests = tests[tests["open_date"] >= pd.Timestamp.now() - pd.Timedelta(days=test_days)]
+    tests = tests[~lowest_price(tests)]   # 최저가 입찰은 사정율로 이기는 게 아니라서 시험에서 뺌
     if len(tests) > max_tests:
         tests = tests.sample(max_tests, random_state=0).sort_values("open_date")
     # 개찰순위(상위 업체 투찰금액)가 있으면 '가상 순위'까지 계산
