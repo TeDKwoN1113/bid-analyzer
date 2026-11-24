@@ -42,6 +42,22 @@ def main(days: int = 270, max_tests: int = 800) -> None:
                               "하한 미달률(%)": g["결과"].apply(lambda x: round((x == "하한 미달").mean() * 100, 1))})
             print(f"\n--- {name} ---")
             print(t.to_string())
+        # ---- 경쟁 공고(참가 200곳 이상)만: 우리가 실제로 넣는 공고 유형 ----
+        pmap = df.set_index("bid_key")["participants"]
+        c = detail.assign(p=detail["bid_key"].map(pmap))
+        c = c[c["p"] >= 200]
+        if len(c):
+            g = c.groupby("방식")
+            t = pd.DataFrame({"공고": g.size(), "1순위": g["결과"].apply(lambda x: int((x == "1순위").sum())),
+                              "무작위 기대": g["무작위 기대"].sum().round(2),
+                              "하한 미달률(%)": g["결과"].apply(lambda x: round((x == "하한 미달").mean() * 100, 1)),
+                              "추천-실제(중앙)": (g["추천 사정율"].median() - 0).round(2)})
+            t["추천-실제(중앙)"] = c.assign(d=c["추천 사정율"] - c["실제 사정율"]).groupby("방식")["d"].median().round(3)
+            if "가상 순위" in c:
+                t["10위 이내"] = g["가상 순위"].apply(lambda x: int((x <= 10).sum()))
+                t["50위 이내"] = g["가상 순위"].apply(lambda x: int((x <= 50).sum()))
+            print(f"\n=== 경쟁 공고(참가 200곳 이상) {c['bid_key'].nunique()}건만 ===")
+            print(t.sort_values(["1순위", "10위 이내"] if "10위 이내" in t else ["1순위"], ascending=False).to_string())
         # ---- 어디서 이기나: 공고 특성별 (현재 방식 기준) ----
         cur = analysis.STRATEGIES[analysis.current_strategy()]
         cols = [c for c in ("bid_key", "participants", "base_amt", "est_price", "contract_method", "method", "org",

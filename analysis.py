@@ -473,7 +473,8 @@ def win_windows(hist: pd.DataFrame) -> pd.DataFrame:
     return h[["bid_key", "sajung", "winner_sajung"]]
 
 
-def win_curve(hist: pd.DataFrame, lo: float = 98.0, hi: float = 102.0, step: float = 0.01) -> pd.DataFrame:
+def win_curve(hist: pd.DataFrame, lo: float = 98.0, hi: float = 102.0, step: float = 0.01,
+              width: float | None = None) -> pd.DataFrame:
     """사정율별 과거 낙찰확률·하한통과확률."""
     grid = np.round(np.arange(lo, hi + 1e-9, step), 4)
     av = hist["sajung"].to_numpy(dtype=float, na_value=np.nan) if len(hist) else np.array([])
@@ -494,7 +495,8 @@ def win_curve(hist: pd.DataFrame, lo: float = 98.0, hi: float = 102.0, step: flo
     # 한 공고의 낙찰 구간은 매우 좁아서 그래프가 들쭉날쭉함 → 범위 평균으로 평활화
     # 표본이 적을수록 더 넓게 평균 (우연히 한 번 맞은 지점에 끌려가지 않도록)
     n = len(w)
-    width = 0.05 if n >= 200 else 0.1 if n >= 50 else 0.2
+    if width is None:
+        width = 0.05 if n >= 200 else 0.1 if n >= 50 else 0.2
     k = max(1, int(round(width / step)))
     smooth = pd.Series(win).rolling(2 * k + 1, center=True, min_periods=1).mean().values
     return pd.DataFrame({"사정율": grid, "낙찰확률": smooth.round(2), "낙찰확률(원값)": win.round(2),
@@ -935,6 +937,8 @@ STRATEGIES = {
     "mean_sajung": "⑤ 단순 평균 (사정율 평균)",
     "mean_winner": "⑥ 과거 1순위 사정율 평균",
     "blend_range": "⑦ 현재 방식 + 예가범위 맞춤",
+    "smooth15": "⑧ 넓게 평활 0.15%p",
+    "smooth30": "⑨ 넓게 평활 0.30%p",
 }
 LABEL_TO_MODE = {v: k for k, v in STRATEGIES.items()}
 
@@ -980,6 +984,8 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True,
     elif mode == "blend_range":
         tl = [(n, same_range(h, row, 5 if n.startswith("같은 기관") else 20)) for n, h in tl]
     curve, weights = blend(tl)
+    if mode in ("smooth15", "smooth30"):
+        curve = win_curve(tl[0][1], width=0.15 if mode == "smooth15" else 0.3)
     fixed_s = None
     if mode == "mean_sajung":
         fixed_s = round(float(tl[0][1]["sajung"].mean()), 2)
@@ -1286,6 +1292,10 @@ def strategy_picks(hist: pd.DataFrame, row, keywords) -> dict:
     reg = [t for t in tl if "지역제한" in t[0]]
     if reg and n_windows(reg[0][1]) >= 5:
         out["④ 울산 지역제한 공고만"] = _pick_from_curve(win_curve(reg[0][1]))
+    # 경쟁 공고(수백 곳)는 낙찰 구간이 0.005%p 정도로 좁아 '과거에 몇 번 맞은 점'을 고르면 우연에 끌려감 →
+    # 넓게 평활해서 '실제 사정율이 자주 나오고 경쟁사가 덜 몰린 넓은 구간'의 중심을 고름
+    for wd, label in ((0.15, "⑧ 넓게 평활 0.15%p"), (0.3, "⑨ 넓게 평활 0.30%p")):
+        out[label] = _pick_from_curve(win_curve(tl[0][1], width=wd))
     out["⑦ 현재 방식 + 예가범위 맞춤"] = _pick_from_curve(blend(
         [(n, same_range(h, row, 5 if n.startswith("같은 기관") else 20)) for n, h in tl])[0])
     out["⑤ 단순 평균 (사정율 평균)"] = round(float(tl[0][1]["sajung"].mean()), 2)
