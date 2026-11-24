@@ -10,10 +10,13 @@ on:
   workflow_dispatch:              # Actions 화면에서 "Run workflow" 버튼으로 바로 실행
     inputs:
       mode:
-        description: "full = 전체 수집, quick = 빠른 수집(오늘 공고·개찰결과만)"
+        description: "full = 전체 수집, quick = 빠른 수집(오늘 공고·개찰결과만), inspect = 공고 점검(아래 공고번호)"
         default: full
         type: choice
-        options: [full, quick]
+        options: [full, quick, inspect]
+      bids:
+        description: "inspect 때 공고번호 (쉼표로 여러 개, 예: R26BK01816770)"
+        default: ""
 
 concurrency:
   group: collect
@@ -53,13 +56,18 @@ jobs:
         if: github.event_name == 'schedule'
         run: python collector.py --scheduled
       - name: 전체 수집 (수동 실행)
-        if: github.event_name != 'schedule' && inputs.mode != 'quick'
+        if: github.event_name != 'schedule' && inputs.mode == 'full'
         run: python collector.py --auto
       - name: 빠른 수집 (수동 실행)
         if: github.event_name != 'schedule' && inputs.mode == 'quick'
         run: python collector.py --quick
+      - name: 공고 점검 (수동 실행)
+        if: github.event_name != 'schedule' && inputs.mode == 'inspect'
+        env:
+          BIDS: ${{ inputs.bids }}
+        run: python inspect_bid.py "$BIDS"
       - name: 알림 보내기
-        if: always() && steps.sched.outputs.skip != 'true'
+        if: always() && steps.sched.outputs.skip != 'true' && inputs.mode != 'inspect'
         run: python notify.py
       - name: 분석 표 캐시 저장
         if: always()
