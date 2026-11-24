@@ -535,7 +535,7 @@ def test_refresh_my_results_fills_rank_and_plan(df, monkeypatch):
                  "drwtYn": "Y", "plnprc": "1050", "bssamt": "1000", "rlOpengDt": past["open_dt"]}]
     monkeypatch.setattr(api_client, "call_all", fake)
     msg = collector.refresh_my_results(days=3650)
-    assert "우리 순위 찾음 1건" in msg, msg
+    assert "실제 금액 찾음 1건" in msg, msg
     m = db.query_df("SELECT * FROM my_bids WHERE bid_key = :k", {"k": key}).iloc[0]
     assert int(m["my_rank"]) == 2 and float(m["amount"]) == 1001
     assert len(db.query_df("SELECT * FROM plans WHERE bid_key = :k", {"k": key})) == 1

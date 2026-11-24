@@ -688,10 +688,10 @@ elif page == "📝 우리 투찰":
             st.session_state["_my_refresh_at"] = pd.Timestamp.now()
             with st.spinner("개찰결과 확인 중…"):
                 try:
-                    _msg = collector.refresh_my_results()
+                    _msg = collector.refresh_my_results(df=raw)
                 except Exception as e:  # noqa: BLE001
                     _msg = f"개찰결과 확인 실패: {e}"
-            if "개찰 확인 0건" not in _msg and "없음" not in _msg:
+            if not ("개찰 확인 0건" in _msg and "새로 찾은 우리 투찰 0건" in _msg):
                 _clear_caches()
                 raw = _load(use_sample)
             st.caption(f"개찰결과 자동 확인: {_msg}")

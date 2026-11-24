@@ -695,7 +695,7 @@ def update_my_bids(progress=None, scan_limit: int = 200) -> str:
     return msg
 
 
-def refresh_my_results(max_bids: int = 10, days: int = 14) -> str:
+def refresh_my_results(max_bids: int = 10, days: int = 14, df=None, scan_limit: int = 30) -> str:
     """사이트에서 '우리 투찰'을 열 때: 개찰 시간이 지났는데 결과가 아직 없는 우리 투찰을 공고번호로 바로 조회.
 
     개찰순위(업체별 금액) → 참가업체수·1순위·우리 순위와 실제 금액, 예비가격 상세 → 예정가격(실제 사정율).
@@ -709,9 +709,7 @@ def refresh_my_results(max_bids: int = 10, days: int = 14) -> str:
                        LEFT JOIN plans p ON p.bid_key = m.bid_key LEFT JOIN openings o ON o.bid_key = m.bid_key
                        WHERE b.open_dt IS NOT NULL AND b.open_dt <= :now AND b.open_dt >= :since""",
                     {"now": nows, "since": since})
-    if q.empty:
-        return "확인할 공고 없음"
-    q = q[~q["bid_key"].astype(str).str.startswith(("D2B", "KEPCO"))]
+    q = q[~q["bid_key"].astype(str).str.startswith(("D2B", "KEPCO"))] if len(q) else q
     need = q[q["my_rank"].isna() | q["plan_price"].isna() | q["participants"].isna()].head(max_bids)
     n_done, n_found, err = 0, 0, ""
     for r in need.itertuples():
@@ -756,7 +754,38 @@ def refresh_my_results(max_bids: int = 10, days: int = 14) -> str:
         except api_client.ApiError as e:
             err = f" (오류: {str(e)[:80]})"
             continue
-    return f"개찰 확인 {n_done}건 · 우리 순위 찾음 {n_found}건{err}"
+    # 기록하지 않은 공고도: 최근 2일 개찰된 우리 참가 가능 공고 중 아직 안 훑은 것을 개찰순위에서 우리 사업자번호로 찾음
+    n_new = 0
+    if biz and df is not None and not err and len(df):
+        try:
+            import analysis
+            now = pd.Timestamp.now()
+            t = df[(df["open_date"] < now) & (df["open_date"] >= now - pd.Timedelta(days=2))]
+            t = analysis.apply_filters(t, keywords=analysis.company_keywords(), eligible_only=True)
+            t = t[~t["bid_key"].astype(str).str.startswith(("D2B", "KEPCO"))]
+            have = set(db.query_df("SELECT bid_key FROM my_bids")["bid_key"])
+            scanned = set(db.query_df("SELECT bid_no FROM limit_checks WHERE op = 'mine_scan'")["bid_no"])
+            for r in t[~t["bid_key"].isin(have) & ~t["bid_key"].isin(scanned)].head(scan_limit).itertuples():
+                try:
+                    ours = find_our_bid(r.bid_no, r.bid_ord, biz)
+                except api_client.QuotaError:
+                    break
+                except api_client.ApiError:
+                    continue
+                # 순위가 아직 안 나온 공고(유찰·개찰 지연)는 다음에 다시 확인
+                if ours is not None or len(db.query_df("SELECT 1 FROM ranks WHERE bid_key = :k AND rank > 0",
+                                                       {"k": r.bid_key})):
+                    db.upsert_many("limit_checks", [{"bid_no": r.bid_key, "op": "mine_scan", "n": int(bool(ours)),
+                                                     "checked_at": db.now()}])
+                if ours:
+                    db.upsert_many("my_bids", [{"bid_key": r.bid_key, "amount": ours["amount"], "sajung": None,
+                                                "memo": "개찰순위에서 자동 발견", "my_rank": int(ours["rank"]),
+                                                "checked_at": db.now(), "created_at": db.now(),
+                                                "rec_amount": None, "amount_source": "개찰순위(실제)"}])
+                    n_new += 1
+        except Exception as e:  # noqa: BLE001
+            err = f" (자동 찾기 실패: {str(e)[:60]})"
+    return f"개찰 확인 {n_done}건 · 우리 순위·실제 금액 찾음 {n_found}건 · 새로 찾은 우리 투찰 {n_new}건{err}"
 
 
 def collect_ranks_auto(progress=None) -> dict:
