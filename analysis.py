@@ -346,6 +346,12 @@ def limit_reasons(df: pd.DataFrame) -> pd.Series:
             few &= df["contract_method"].fillna("").str.contains("경쟁", regex=False) | (df["contract_method"].fillna("") == "")
         if allow:
             few &= ~df["org"].fillna("").map(lambda o: any(x in o for x in allow))
+        # 우리 지역(울산) 현장·기관이면 참가 가능 (2026-11-24 대표 확인: 울산대·울산과학대 등 울산이면 들어갈 수 있음)
+        reg = db.company()["region"] or ""
+        if reg:
+            place = (df["region"].fillna("") if "region" in df else "") + " " + df["org"].fillna("") + " " + \
+                (df["demand_org"].fillna("") if "demand_org" in df else "")
+            few &= ~place.str.contains(reg, regex=False)
         add(few, "소수 참가 기관(협력업체 등록 등 별도 자격 추정)")
     block = [x.strip() for x in (db.get_kv("block_orgs", "") or "").split(",") if x.strip()]
     if block and "org" in df:

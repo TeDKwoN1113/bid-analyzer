@@ -586,3 +586,12 @@ def test_small_participation_orgs_excluded(monkeypatch):
         assert analysis.limit_reasons(d).iloc[0] == ""
     finally:
         db.set_kv("allow_orgs", "")
+
+
+def test_small_org_in_our_region_kept(monkeypatch):
+    """울산 현장·기관이면 소수 참가 기관이어도 참가 가능 (대표 확인)."""
+    monkeypatch.setattr(db, "company", lambda: {"bizno": "", "region": "울산", "licenses": ["전기공사업"]})
+    d = pd.DataFrame({"name": ["a", "b"], "org": ["울산대학교", "영남대학교"], "region": ["울산광역시 남구", "경상북도 경산시"],
+                      "org_part_median": [5, 6], "org_part_n": [13, 21], "contract_method": ["제한경쟁", "제한경쟁"]})
+    r = analysis.limit_reasons(d)
+    assert r.iloc[0] == "" and "소수 참가" in r.iloc[1]
