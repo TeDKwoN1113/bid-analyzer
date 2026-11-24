@@ -192,7 +192,7 @@ def qualification_analysis(done: pd.DataFrame) -> None:
             print("1순위 탈락 시 최종 낙찰 순위:", hit["rank"].value_counts().sort_index().head(10).to_dict(),
                   f"(중앙 {hit['rank'].median():.0f}위)")
     try:
-        lim = float(db.get_kv("qual_max_est", "") or 0)
+        lim = float(db.get_kv("qual_max_est", "") or 0) * 1e8   # 설정은 '억' 단위
     except ValueError:
         lim = 0
     if lim:
