@@ -659,6 +659,28 @@ def _band(h: pd.DataFrame, base, min_n: int) -> pd.DataFrame:
     return h
 
 
+def _rng(x) -> pd.Series | float:
+    """예가 범위 폭(%p): ±2% → 4.0, ±3% → 6.0 (실제 사정율 퍼짐이 달라서 같은 범위끼리 비교)."""
+    if isinstance(x, pd.DataFrame):
+        if "range_begin" not in x or "range_end" not in x:
+            return pd.Series(np.nan, index=x.index)
+        return (x["range_begin"].abs() + x["range_end"].abs()).round(1)
+    try:
+        rb, re_ = x.get("range_begin"), x.get("range_end")
+        return round(abs(float(rb)) + abs(float(re_)), 1) if pd.notna(rb) and pd.notna(re_) else np.nan
+    except (TypeError, ValueError):
+        return np.nan
+
+
+def same_range(h: pd.DataFrame, row, min_n: int = 20) -> pd.DataFrame:
+    """예가 범위가 같은 공고만 (충분할 때)."""
+    r = _rng(row)
+    if pd.isna(r) or h.empty:
+        return h
+    c = h[_rng(h) == r]
+    return c if n_windows(c) >= min_n else h
+
+
 def is_local_bid(row, region: str | None = None) -> bool:
     """우리 지역(울산) 지역제한 공고인지."""
     reg = region if region is not None else db.company()["region"]
@@ -716,7 +738,7 @@ def _context(df: pd.DataFrame, keywords, region: str):
         loc = local_region_history(ind, region) if region else ind.iloc[0:0]
     # 계산에 필요한 열만 남겨 가볍게 (넓은 표를 반복 복사하는 비용 절감)
     cols = [c for c in ("bid_key", "name", "org", "open_date", "sajung", "winner_sajung",
-                        "participants", "base_amt", "first_won") if c in df]
+                        "participants", "base_amt", "first_won", "range_begin", "range_end") if c in df]
     done, ind, loc = done[cols], ind[cols], loc[cols]
     ctx = {"df": df, "done": done, "ind": ind, "loc": loc, "by_org": dict(tuple(ind.groupby("org")))}
     if len(_ctx_cache) > 8:
@@ -819,6 +841,7 @@ STRATEGIES = {
     "region_only": "④ 울산 지역제한 공고만",
     "mean_sajung": "⑤ 단순 평균 (사정율 평균)",
     "mean_winner": "⑥ 과거 1순위 사정율 평균",
+    "blend_range": "⑦ 현재 방식 + 예가범위 맞춤",
 }
 LABEL_TO_MODE = {v: k for k, v in STRATEGIES.items()}
 
@@ -861,6 +884,8 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True,
         tl = tl[:1]
     elif mode == "region_only" and reg_tiers and n_windows(reg_tiers[0][1]) >= 5:
         tl = reg_tiers
+    elif mode == "blend_range":
+        tl = [(n, same_range(h, row, 5 if n.startswith("같은 기관") else 20)) for n, h in tl]
     curve, weights = blend(tl)
     fixed_s = None
     if mode == "mean_sajung":
@@ -1168,6 +1193,8 @@ def strategy_picks(hist: pd.DataFrame, row, keywords) -> dict:
     reg = [t for t in tl if "지역제한" in t[0]]
     if reg and n_windows(reg[0][1]) >= 5:
         out["④ 울산 지역제한 공고만"] = _pick_from_curve(win_curve(reg[0][1]))
+    out["⑦ 현재 방식 + 예가범위 맞춤"] = _pick_from_curve(blend(
+        [(n, same_range(h, row, 5 if n.startswith("같은 기관") else 20)) for n, h in tl])[0])
     out["⑤ 단순 평균 (사정율 평균)"] = round(float(tl[0][1]["sajung"].mean()), 2)
     w = tl[0][1]["winner_sajung"].dropna()
     if len(w):
@@ -1199,7 +1226,7 @@ def backtest(df: pd.DataFrame, keywords, test_days: int = 90, max_tests: int = 3
         pre["_loc"] = pre["bid_key"].isin(local_region_history(pre, region)["bid_key"])
         pre.attrs["_loc_key"] = region
     keep = [c for c in ("bid_key", "name", "org", "open_date", "sajung", "winner_sajung", "participants",
-                        "base_amt", "first_won", "_ind", "_loc") if c in pre]
+                        "base_amt", "first_won", "_ind", "_loc", "range_begin", "range_end") if c in pre]
     attrs = dict(pre.attrs)
     pre = pre[keep].sort_values("open_date")
     pre.attrs.update(attrs)

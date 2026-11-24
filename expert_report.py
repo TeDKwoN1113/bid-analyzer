@@ -148,6 +148,15 @@ def participant_analysis(done: pd.DataFrame) -> None:
                                                     공고당무작위확률=("participants", lambda x: (1 / x[x > 0]).mean() * 100))
     print(p.round(2).to_string())
     print("공고당무작위확률(%) = 아무렇게나 넣어도 1순위가 될 확률. 이 값이 큰 공고일수록 같은 노력으로 더 많이 이김.")
+    few = done[done["participants"].between(1, 30)]
+    if len(few):
+        print(f"\n참가 30곳 이하 공고 {len(few)}건 — 어떤 기관·공고인가 (기회인지, 실제로는 못 넣는 공고인지 판단용)")
+        t = few.groupby("org").agg(공고=("bid_key", "size"), 참가중앙=("participants", "median"),
+                                   기초중앙_백만=("base_amt", lambda x: round(x.median() / 1e6)),
+                                   계약방법=("contract_method", lambda x: x.mode().iat[0] if len(x.mode()) else ""),
+                                   공사지역=("region", lambda x: str(x.mode().iat[0])[:12] if len(x.mode()) else ""))
+        print(t.sort_values("공고", ascending=False).head(15).to_string())
+        print("예시 공고명:", " / ".join(few.sort_values("open_date", ascending=False)["name"].astype(str).str[:30].head(8)))
 
 
 def main() -> None:
