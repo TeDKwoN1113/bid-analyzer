@@ -342,9 +342,17 @@ def auto(progress=print) -> dict:
                 missing.append(d)
             d -= timedelta(days=1)
         days = recent + missing
-        res = collect_days(op, days)
-        if missing and res["count"]:
-            backfilled = True
+        # 최근 2주 안의 날짜는 분석 표가 어차피 새로 받으므로, 그보다 오래된 날짜에서 자료가 나왔을 때만
+        # '과거 자료를 채웠다'로 봄 (매번 전체를 다시 내려받아 전송량을 낭비하지 않게)
+        near_cut = today - timedelta(days=14)
+        old = [x for x in missing if x < near_cut]
+        res = collect_days(op, recent + [x for x in missing if x >= near_cut])
+        if old and not res["stopped"]:
+            r2 = collect_days(op, old)
+            if r2["count"]:
+                backfilled = True
+            res = {"count": res["count"] + r2["count"], "days": len(days), "errors": res["errors"] + r2["errors"],
+                   "stopped": r2["stopped"]}
         msg = f"최근 3일 + 과거 {len(missing)}일"
         if res["stopped"]:
             msg += " / " + res["stopped"]
@@ -357,7 +365,7 @@ def auto(progress=print) -> dict:
     try:
         import d2b
         summary["국방"] = d2b.auto(progress)
-        backfilled = backfilled or "과거 결과" in summary["국방"]
+        # 국방 과거 결과는 분석 표가 국방 공고를 매번 새로 받으므로 전체 다시 받기 표시를 하지 않음
         if progress:
             progress(summary["국방"])
     except Exception as e:  # noqa: BLE001  국방 문제로 나라장터 수집이 멈추지 않게

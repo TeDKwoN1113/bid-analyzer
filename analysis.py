@@ -27,7 +27,8 @@ _BASE_SQL = """
         LEFT JOIN results r ON r.bid_key = b.bid_key
 """
 # 최근 공고만 다시 받는 조건 (개찰 결과·낙찰자는 개찰 후 2주 안에 채워짐)
-_RECENT_WHERE = "WHERE b.open_dt IS NULL OR b.open_dt >= :cut OR b.notice_dt >= :cut"
+# 국방(D2B…)은 과거 결과를 매일 조금씩 채우므로 항상 새로 받음 (건수가 적어 부담 없음)
+_RECENT_WHERE = "WHERE b.open_dt IS NULL OR b.open_dt >= :cut OR b.notice_dt >= :cut OR b.bid_key LIKE 'D2B%'"
 CACHE_FULL_DAYS = 7      # 이 주기로 전체를 새로 받음 (삭제·정정 반영)
 CACHE_MARGIN_DAYS = 14   # 마지막으로 받은 날보다 이만큼 앞부터 다시 받음
 _mem: dict = {}
