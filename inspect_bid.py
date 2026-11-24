@@ -6,6 +6,7 @@
 import json
 import sys
 
+import numpy as np
 import pandas as pd
 
 import api_client
@@ -132,7 +133,37 @@ def d2b_selftest(n: int = 4) -> None:
             print("  [시스템] 저장 안 됨(우리 업종 아님 또는 아직 수집 전)")
 
 
+def eligibility_summary() -> None:
+    """개찰 전·우리 업종 공고가 어떤 이유로 빠지는지 (넣을 수 있는 공고를 잘못 버리지 않는지 점검)."""
+    import analysis
+    df = analysis.load_dataset()
+    now = pd.Timestamp.now()
+    up = analysis.apply_filters(df[df["open_date"] >= now], keywords=analysis.company_keywords())
+    ok = analysis.eligible(up)
+    reasons = analysis.limit_reasons(up)
+    reg = db.company()["region"] or "울산"
+    print(f"개찰 전 우리 업종 공고 {len(up)}건 → 참가 가능 {int(ok.sum())}건 · 제외 {int((~ok).sum())}건")
+    ex = up[~ok].copy()
+    ex["사유"] = reasons[~ok].replace("", np.nan)
+    allowed = ex["allowed_regions"].fillna("")
+    ex.loc[ex["사유"].isna() & (allowed != "") & ~allowed.str.contains(reg, regex=False), "사유"] = "지역제한(다른 지역)"
+    ex.loc[ex["사유"].isna() & ex["method"].fillna("").str.contains("수의시담"), "사유"] = "수의시담"
+    ex.loc[ex["사유"].isna() & ~ex["allowed_regions_known"].astype(bool), "사유"] = "지역정보 아직 없음(현장이 다른 지역)"
+    ex["사유"] = ex["사유"].fillna("면허 불일치/기타")
+    for why, g in ex.groupby(ex["사유"].str.split(" · ").str[0]):
+        print(f"\n[{why}] {len(g)}건 — 예:")
+        for r in g.sort_values("open_date").head(6).itertuples():
+            print(f"   · {str(r.name)[:40]} | {str(r.org)[:16]} | 지역 {str(r.allowed_regions or '-')[:20]} | "
+                  f"면허 {str(r.licenses or '-')[:40]} | {str(r.contract_method or '')[:8]} | {r.bid_no}")
+    lp = analysis.lowest_price(up[ok])
+    print(f"\n참가 가능 중 최저가 내역서 입찰 {int(lp.sum())}건, ⭐ 후보 계산은 사이트에서")
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] and sys.argv[1].strip().upper() == "ELIG":
+        load_settings()
+        eligibility_summary()
+        sys.exit(0)
     if sys.argv[1:] and sys.argv[1].strip().upper() == "D2BTEST":
         load_settings()
         d2b_selftest()
