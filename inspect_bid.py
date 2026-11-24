@@ -85,7 +85,45 @@ def region_selftest(n: int = 3) -> None:
                 print(f"  inqryDiv={div}: 오류 {str(e)[:150]}")
 
 
+def d2b_selftest(n: int = 4) -> None:
+    """국방 10억 미만 공사 공고 몇 건의 상세에서 지역제한(areaLmttList)이 실제로 오는지, 우리 시스템 판단은 어떤지."""
+    from datetime import date, timedelta
+
+    import d2b
+    lst, _ = d2b.call(d2b.BID, "getFcltyCmpetBidPblancList",
+                      {"anmtDateBegin": d2b._d(date.today() - timedelta(days=20)), "anmtDateEnd": d2b._d(date.today())},
+                      rows=200)
+    small = [x for x in lst if (d2b._num(x.get("baseAmnt")) or 0) < 1.1e9]
+    big = [x for x in lst if (d2b._num(x.get("baseAmnt")) or 0) >= 1.1e9]
+    print(f"국방 공고 최근 20일 {len(lst)}건 (10억 미만 {len(small)} · 이상 {len(big)})")
+    import analysis
+    df = analysis.load_dataset()
+    for x in small[:n] + big[:2]:
+        p_ = {k: x.get(k) for k in ("pblancYear", "pblancSeCode", "pblancNo", "pblancOdr", "cntrwkNo", "orntCode")}
+        try:
+            det = (d2b.call(d2b.BID, "getFcltyCmpetBidPblancDetail", p_)[0] or [{}])[0]
+        except Exception as e:  # noqa: BLE001
+            print("  상세 오류", str(e)[:120])
+            continue
+        key = d2b.keys(x)[0] if hasattr(d2b, "keys") else ""
+        print(f"\n[{x.get('cntrwkNm')}] 기초 {d2b._num(x.get('baseAmnt')) or 0:,.0f} · 공사지역 {det.get('cntrwkLc') or det.get('lc')}")
+        print("  areaLmttList:", repr(det.get("areaLmttList"))[:300], "| lcnsLmttList:", repr(det.get("lcnsLmttList"))[:200])
+        print("  지역관련 항목:", {k: v for k, v in det.items() if any(h in k.lower() for h in ("area", "rgn", "lc", "lmt"))
+                              and v not in ("", None)})
+        r = df[df["bid_key"].astype(str).str.startswith(str(key).rsplit("-", 1)[0])] if key else df.iloc[0:0]
+        if len(r):
+            r0 = r.iloc[0]
+            print("  [시스템] 참가지역:", repr(r0.get("allowed_regions")), "확인됨:", r0.get("allowed_regions_known"),
+                  "| 참가 가능:", bool(analysis.eligible(r.head(1)).iloc[0]))
+        else:
+            print("  [시스템] 저장 안 됨(우리 업종 아님 또는 아직 수집 전)")
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] and sys.argv[1].strip().upper() == "D2BTEST":
+        load_settings()
+        d2b_selftest()
+        sys.exit(0)
     load_settings()
     if sys.argv[1:] and sys.argv[1].strip().upper() == "REGIONTEST":
         region_selftest()
