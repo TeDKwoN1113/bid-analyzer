@@ -602,3 +602,18 @@ def test_lowest_price_bids_flagged():
                       "contract_method": ["제한경쟁", "일반경쟁", "제한경쟁"],
                       "org_part_median": [300, 400, 5], "org_part_n": [10, 10, 13]})
     assert list(analysis.lowest_price(d)) == [True, False, True]
+
+
+def test_partner_license_joint_contract(monkeypatch):
+    """전기+소방을 함께 요구하는 공고: 소방 면허가 없어도 협정(공동도급)으로 참가 가능. 소방만 요구하면 불가."""
+    both = (("전기공사업/0037", "일반소방시설공사업(전기)/0039 [전문소방시설공사업/0040]"),)
+    fire_only = (("일반소방시설공사업(기계)/0038 [전문소방시설공사업/0040]",),)
+    elevator = (("승강기 제조업/6876", "전기공사업/0037"),)
+    lic = ["전기공사업"]
+    assert not analysis.license_ok(both, lic)
+    assert analysis.license_partner_ok(both, lic, ["소방"])
+    assert not analysis.license_partner_ok(fire_only, lic, ["소방"])
+    assert not analysis.license_partner_ok(elevator, lic, ["소방"])
+    d = pd.DataFrame({"license_groups": [both, fire_only, (("전기공사업/0037",),)]})
+    monkeypatch.setattr(analysis, "partner_keywords", lambda: ["소방"])
+    assert list(analysis.needs_partner(d, lic)) == [True, False, False]

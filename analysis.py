@@ -275,7 +275,9 @@ def eligible(df: pd.DataFrame, company_region: str | None = None,
         if "license_groups" in df:
             grp = df["license_groups"]
             has_grp = grp.map(lambda x: isinstance(x, tuple) and len(x) > 0)
-            by_grp = pd.Series([license_ok(x, lic) if h else True for x, h in zip(grp, has_grp)], index=df.index)
+            parts = partner_keywords()
+            by_grp = pd.Series([(license_ok(x, lic) or license_partner_ok(x, lic, parts)) if h else True
+                                for x, h in zip(grp, has_grp)], index=df.index)
             ok &= ~has | (has_grp & by_grp) | (~has_grp & simple)
         else:
             ok &= ~has | simple
@@ -309,6 +311,36 @@ def license_ok(groups, company_licenses: list[str]) -> bool:
                 return True
         return False
     return any(all(entry_ok(e) for e in g) for g in groups)
+
+
+def partner_keywords() -> list[str]:
+    """공동도급 협정으로 채울 수 있는 면허 (설정, 기본: 소방 — 2026-11-24 대표: 전기/소방 공고는 협정 가능)."""
+    v = db.get_kv("partner_licenses", None)
+    return [x.strip() for x in (v if v is not None else "소방").split(",") if x.strip()]
+
+
+def license_partner_ok(groups, company_licenses: list[str], partners: list[str]) -> bool:
+    """우리 면허 + 협정 업체 면허(예: 소방)로 어떤 묶음을 채울 수 있는지. 우리 면허가 묶음에 하나는 있어야 함."""
+    if not groups or not partners:
+        return False
+    mine = [_lic_core(x) for x in company_licenses if x]
+
+    def ours(e: str) -> bool:
+        return license_ok(((e,),), company_licenses)
+
+    def partner(e: str) -> bool:
+        return any(p in e for p in partners)
+    return bool(mine) and any(any(ours(e) for e in g) and all(ours(e) or partner(e) for e in g) for g in groups)
+
+
+def needs_partner(df: pd.DataFrame, company_licenses: list[str] | None = None) -> pd.Series:
+    """우리 면허만으로는 안 되고 협정(공동도급)이 있어야 참가 가능한 공고."""
+    lic = company_licenses if company_licenses is not None else db.company()["licenses"]
+    if "license_groups" not in df or not lic:
+        return pd.Series(False, index=df.index)
+    parts = partner_keywords()
+    return pd.Series([isinstance(g, tuple) and len(g) > 0 and not license_ok(g, lic) and license_partner_ok(g, lic, parts)
+                      for g in df["license_groups"]], index=df.index)
 
 
 # 공고명에 실적·기술자 보유 조건이 적힌 경우 (예: ★기술자 및 실적보유★, ★전차선실적및기술자보유★, [실적제한])

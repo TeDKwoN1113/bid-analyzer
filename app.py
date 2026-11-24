@@ -406,6 +406,8 @@ if page == "🏠 오늘의 투찰":
                 st.caption("🪖 국방전자조달(d2b.go.kr) 공고 — 입찰참가등록을 해야 투찰할 수 있어요")
             if bool(analysis.lowest_price(pd.DataFrame([r])).iloc[0]):
                 st.markdown(f":orange[**💲 {analysis.LOWEST_NOTE}**]")
+            if bool(analysis.needs_partner(pd.DataFrame([r])).iloc[0]):
+                st.markdown(f":violet[**🤝 공동도급 협정 필요 — 면허: {r['licenses']}**  (우리 전기 + 협정 업체)]")
             if pd.notna(qd):
                 left = (qd.normalize() - now.normalize()).days
                 txt = f"참가등록 마감 {qd.strftime('%m/%d %H:%M')}"
@@ -1350,6 +1352,8 @@ elif page == "⚙️ 설정 · API 점검":
                       value=db.get_kv("allow_joint_duty", "0") == "1",
                       help="예: 부산 현장 + 지역의무공동도급 49% → 부산 업체와 손잡아야 참가 가능. 끄면 목록·알림에서 뺍니다. "
                            "우리 지역(울산) 현장은 항상 포함.")
+    cpart = st.text_input("공동도급 협정으로 채울 수 있는 면허 (쉼표 구분, 예: 소방) — 전기+이 면허를 함께 요구하는 공고도 참가 가능으로",
+                          db.get_kv("partner_licenses", None) if db.get_kv("partner_licenses", None) is not None else "소방")
     corg1, corg2 = st.columns(2)
     allow_o = corg1.text_input("참가 가능 기관 (쉼표 구분) — 소수 참가 기관이지만 우리가 등록돼 있어 넣을 수 있는 곳",
                                db.get_kv("allow_orgs", "") or "",
@@ -1365,6 +1369,7 @@ elif page == "⚙️ 설정 · API 점검":
         db.set_kv("allow_perf_limit", "1" if cperf else "0")
         db.set_kv("allow_joint_duty", "1" if cjd else "0")
         db.set_kv("allow_orgs", allow_o.strip())
+        db.set_kv("partner_licenses", cpart.strip())
         db.set_kv("block_orgs", block_o.strip())
         db.set_kv("qual_max_est", qlim.strip())
         db.set_kv("company_name", cname.strip())
