@@ -324,13 +324,31 @@ if page == "🏠 오늘의 투찰":
         return "오늘 마감" if d == 0 else f"D-{d}"
 
     # 기초금액 공개 공고는 미리 투찰금액·낙찰확률 계산 (정렬용)
-    picks = {}
+    picks, exp_n = {}, {}
     phist = analysis.pick_history()
+    _lp = analysis.lowest_price(todo.head(80))
     for _, r in todo.head(80).iterrows():
+        if _lp.get(_, False):
+            continue   # 최저가 내역서 입찰: 사정율 추천 안 함
+        kw_ = analysis.bid_keywords(r, sel_lics or _lics)
+        exp_n[r["bid_key"]] = analysis.expected_competition(raw, r, kw_)
         if pd.notna(r["base_amt_notice"]) and pd.notna(r["lower_rate"]):
-            picks[r["bid_key"]] = analysis.pick_bid(raw, r, analysis.bid_keywords(r, sel_lics or _lics),
-                                                    prev=analysis.prev_pick(phist, r["bid_key"]))
-    order = st.radio("정렬", ["마감 임박순", "낙찰확률 높은순"], horizontal=True, label_visibility="collapsed")
+            picks[r["bid_key"]] = analysis.pick_bid(raw, r, kw_, prev=analysis.prev_pick(phist, r["bid_key"]))
+
+    def _focus(k):
+        e = exp_n.get(k)
+        return e is not None and e <= analysis.FOCUS_MAX_PARTICIPANTS
+    n_focus = sum(_focus(k) for k in todo.head(80)["bid_key"])
+    if n_focus:
+        st.success(f"★ 집중 공고 {n_focus}건 — 과거 비슷한 공고에 {analysis.FOCUS_MAX_PARTICIPANTS}곳 이하만 들어와서 "
+                   "같은 노력으로 이길 확률이 2~3배 높은 공고입니다. 먼저 챙기세요.")
+    order = st.radio("정렬", ["마감 임박순", "★ 경쟁 적은순", "낙찰확률 높은순"], horizontal=True,
+                     label_visibility="collapsed")
+    if order == "★ 경쟁 적은순":
+        todo = todo.assign(_e=todo["bid_key"].map(lambda k: exp_n.get(k) or 1e9))
+        todo = todo.sort_values(["_e", "마감기준"], ascending=[True, True])
+        st.caption("과거 비슷한 공고(같은 기관 → 울산 지역제한 → 전국 같은 업종·금액대)의 참가업체 수가 적은 순서입니다. "
+                   "참가업체가 적을수록 1순위 확률이 높습니다.")
     if order == "낙찰확률 높은순":
         todo = todo.assign(_p=todo["bid_key"].map(lambda k: (picks.get(k) or {}).get("낙찰확률") or -1))
         todo = todo.sort_values(["_p", "마감기준"], ascending=[False, True])
@@ -357,10 +375,12 @@ if page == "🏠 오늘의 투찰":
                 "💰 투찰금액": f"{pk['투찰금액']:,}원" if pk else "",
                 "사정율": f"{pk['사정율']:.2f}%" if pk else "",
                 "낙찰확률": f"{pk['낙찰확률']}%" if pk and pk.get("낙찰확률") is not None else "",
+                "예상 참가": ("★ " if _focus(r["bid_key"]) else "") + (f"{exp_n[r['bid_key']]:.0f}곳"
+                                                                    if exp_n.get(r["bid_key"]) else ""),
                 "기록": "✅" if r["bid_no"] in mine_map else "",
                 "공고": r["url"] if isinstance(r["url"], str) and r["url"].startswith("http") else None,
             })
-        cols_t = ["D-day", "공고명", "💰 투찰금액", "사정율", "낙찰확률", "기초금액", "투찰마감", "개찰",
+        cols_t = ["D-day", "공고명", "예상 참가", "💰 투찰금액", "사정율", "낙찰확률", "기초금액", "투찰마감", "개찰",
                   "참가등록마감", "발주처", "참가지역", "추정가격", "기록", "공고"]
         st.dataframe(pd.DataFrame(rows_t)[cols_t], hide_index=True, use_container_width=True,
                      height=min(38 * (len(rows_t) + 1) + 4, 640),
@@ -372,9 +392,12 @@ if page == "🏠 오늘의 투찰":
         with st.container(border=True):
             top = st.columns([5, 1])
             link = f"[{r['name']}]({r['url']})" if isinstance(r["url"], str) and r["url"].startswith("http") else r["name"]
-            top[0].markdown(f"**{link}**")
+            top[0].markdown(("⭐ " if _focus(r["bid_key"]) else "") + f"**{link}**")
             top[1].markdown(f"**{dday(r['마감기준'])}**")
             limit = r["allowed_regions"] or ("제한없음" if r["allowed_regions_known"] else "확인중")
+            if exp_n.get(r["bid_key"]):
+                st.caption(("★ 집중 — " if _focus(r["bid_key"]) else "") +
+                           f"예상 참가 약 {exp_n[r['bid_key']]:.0f}곳 (과거 비슷한 공고 기준)")
             st.caption(f"{r['org']} · 참가지역 {limit} · 투찰마감 "
                        f"{'-' if pd.isna(r['close_date']) else r['close_date'].strftime('%m/%d %H:%M')} · "
                        f"개찰 {r['open_date'].strftime('%m/%d %H:%M')} · {r['contract_method'] or r['method'] or ''}")

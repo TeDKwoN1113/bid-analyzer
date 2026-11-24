@@ -127,6 +127,15 @@ def scope() -> str:
 DETAIL_MAX = 15  # 새 공고·개찰 결과는 한 번에 이만큼만 자세히 (나머지는 건수만)
 
 
+def _focus_line(df, r) -> str:
+    """경쟁이 적을 것으로 예상되는 공고 표시 (과거 비슷한 공고의 참가업체 수)."""
+    e = analysis.expected_competition(df, r, analysis.bid_keywords(r))
+    if e is None:
+        return ""
+    star = "⭐ 집중 — " if e <= analysis.FOCUS_MAX_PARTICIPANTS else ""
+    return f"\n  {star}예상 참가 약 {e:.0f}곳"
+
+
 def _more(lines: list[str], n: int) -> None:
     if n > DETAIL_MAX:
         lines.append(f"… 외 {n - DETAIL_MAX}건은 사이트에서 확인")
@@ -217,7 +226,7 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
                          + (f"\n  ⛔ 참가등록 마감 {_dt(r['qual_dt'])} (국방전자조달)" if analysis.is_d2b(r["bid_key"])
                             and pd.notna(pd.to_datetime(r.get('qual_dt'), errors='coerce', format='mixed')) else "")
                          + ("\n  💲 최저가 내역서 입찰 (내역서·도면 검토 후 견적)" if bool(analysis.lowest_price(pd.DataFrame([r])).iloc[0])
-                            else ""))
+                            else _focus_line(df, r)))
             keys.append((r["bid_key"], "new"))
         _more(lines, len(new))
         parts.append("\n".join(lines))

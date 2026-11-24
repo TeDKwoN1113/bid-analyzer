@@ -808,6 +808,19 @@ def expected_participants(tier_list) -> float | None:
     return None
 
 
+FOCUS_MAX_PARTICIPANTS = 150   # 예상 참가업체가 이 이하면 '★ 집중' (울산 지역제한 보통 350곳, 전국 1,000곳 안팎)
+
+
+def expected_competition(df: pd.DataFrame, row, keywords=None) -> float | None:
+    """기초금액 공개 전에도: 과거 비슷한 공고(같은 기관 → 울산 지역제한 → 전국 같은 업종·금액대)의 참가업체 수 중앙값."""
+    try:
+        if pd.isna(row.get("base_amt")) and pd.notna(row.get("est_price")):
+            row = {**dict(row), "base_amt": row["est_price"] * 1.1}
+        return expected_participants(tiers(df, row, keywords))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def comparable(h: pd.DataFrame, expected: float | None, min_n: int = 20) -> pd.DataFrame:
     """경쟁 강도가 비슷한 공고만. 참가업체가 적은 공고는 '이기는 구간'이 넓어서 섞으면 추천이 높아짐
     (2026-11-23 첫 실전: 350곳 공고에 소액·소수참가 공고가 섞여 실제보다 0.3~0.7%p 높게 추천된 원인)."""
