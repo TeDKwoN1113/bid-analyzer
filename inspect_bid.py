@@ -6,6 +6,8 @@
 import json
 import sys
 
+import pandas as pd
+
 import api_client
 import db
 from config import load_settings
@@ -64,8 +66,30 @@ def inspect(no: str, ord_: str = "000") -> None:
         print("  [시스템] 판단 출력 실패:", e)
 
 
+def region_selftest(n: int = 3) -> None:
+    """지역제한이 '확실히' 있는 최근 공고(날짜별 수집으로 참가지역이 들어온 공고)를 골라 공고번호 조회도 같은 결과인지 확인."""
+    q = db.query_df("""SELECT r.bid_key, COUNT(*) AS n FROM regions r JOIN bids b ON b.bid_key = r.bid_key
+                       WHERE b.notice_dt >= :d GROUP BY r.bid_key ORDER BY r.bid_key DESC LIMIT :n""",
+                    {"d": (pd.Timestamp.now() - pd.Timedelta(days=10)).strftime("%Y-%m-%d"), "n": n})
+    print(f"지역제한 확실한 공고 {len(q)}건으로 공고번호 조회 시험")
+    for k, cnt in zip(q["bid_key"], q["n"]):
+        no, o = k.rsplit("-", 1)
+        print(f"\n[{k}] DB에 저장된 참가지역 {cnt}건")
+        for div in ("2", "1", "3"):
+            try:
+                items, total = api_client.call("regions", {"inqryDiv": div, "bidNtceNo": no, "bidNtceOrd": o}, rows=100)
+                mine = [x for x in items if str(x.get("bidNtceNo")) == no]
+                print(f"  inqryDiv={div}: 응답 {len(items)}건 · 이 공고 {len(mine)}건",
+                      json.dumps(mine[:2], ensure_ascii=False)[:400] if mine else "")
+            except Exception as e:  # noqa: BLE001
+                print(f"  inqryDiv={div}: 오류 {str(e)[:150]}")
+
+
 if __name__ == "__main__":
     load_settings()
+    if sys.argv[1:] and sys.argv[1].strip().upper() == "REGIONTEST":
+        region_selftest()
+        sys.exit(0)
     for a in sys.argv[1:]:
         for x in a.replace(",", " ").split():
             n, _, o = x.partition("-")
