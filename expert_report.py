@@ -162,6 +162,44 @@ def participant_analysis(done: pd.DataFrame) -> None:
         print("예시 공고명:", " / ".join(few.sort_values("open_date", ascending=False)["name"].astype(str).str[:30].head(8)))
 
 
+# ---------------- 5. 적격심사 ----------------
+def qualification_analysis(done: pd.DataFrame) -> None:
+    section("5. 적격심사: 1순위가 심사에서 떨어지는 공고는?")
+    d = done[done["first_won"].notna()].copy()
+    if d.empty:
+        print("1순위·최종 낙찰자 둘 다 있는 공고 없음")
+        return
+    d = d[~analysis.lowest_price(d)]
+    amt = d["est_price"].fillna(d["base_amt"] / 1.1)
+    d["금액"] = pd.cut(amt, [0, 1e8, 3e8, 1e9, 5e9, 1e13], labels=["~1억", "1~3억", "3~10억", "10~50억", "50억~"])
+    d["탈락"] = 1 - d["first_won"]
+    print(f"1순위·최종 낙찰자 모두 있는 공고 {len(d):,}건 · 1순위가 그대로 낙찰 {d['first_won'].mean() * 100:.1f}%")
+    t = d.groupby("금액", observed=True).agg(공고=("탈락", "size"), 일순위탈락률=("탈락", "mean"), 참가중앙=("participants", "median"))
+    t["일순위탈락률"] = (t["일순위탈락률"] * 100).round(1)
+    print(t.to_string())
+    m = d.groupby(d["method"].fillna("?").str.slice(0, 18)).agg(공고=("탈락", "size"), 일순위탈락률=("탈락", "mean"))
+    m = m[m["공고"] >= 10]
+    m["일순위탈락률"] = (m["일순위탈락률"] * 100).round(1)
+    print(m.sort_values("공고", ascending=False).head(10).to_string())
+    # 1순위가 떨어졌을 때 최종 낙찰자는 몇 순위였나 (개찰순위가 있는 공고)
+    fail = d[d["탈락"] == 1]
+    rk = analysis.load_ranks(fail["bid_key"])
+    if len(rk):
+        wb = fail.set_index("bid_key")["winner_bizno"].astype(str).str.replace("-", "")
+        rk["wb"] = rk["bid_key"].map(wb)
+        hit = rk[rk["bizno"].astype(str).str.replace("-", "") == rk["wb"]]
+        if len(hit):
+            print("1순위 탈락 시 최종 낙찰 순위:", hit["rank"].value_counts().sort_index().head(10).to_dict(),
+                  f"(중앙 {hit['rank'].median():.0f}위)")
+    try:
+        lim = float(db.get_kv("qual_max_est", "") or 0)
+    except ValueError:
+        lim = 0
+    if lim:
+        over = (amt > lim).mean() * 100
+        print(f"회사 적격심사 한도(추정가격 {lim / 1e8:.1f}억) 넘는 공고 비율 {over:.1f}%")
+
+
 def small_org_bids() -> pd.DataFrame:
     df = analysis.load_dataset()
     d = analysis.apply_filters(df[df["open_date"].notna()], keywords=analysis.company_keywords())
@@ -175,7 +213,7 @@ def main() -> None:
     if done.empty:
         print("분석할 공고 없음")
         return
-    for f in (org_analysis, prelim_analysis, competitor_analysis, participant_analysis):
+    for f in (qualification_analysis, org_analysis, prelim_analysis, competitor_analysis, participant_analysis):
         try:
             f(done)
         except Exception as e:  # noqa: BLE001
