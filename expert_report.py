@@ -200,6 +200,55 @@ def qualification_analysis(done: pd.DataFrame) -> None:
         print(f"회사 적격심사 한도(추정가격 {lim / 1e8:.1f}억) 넘는 공고 비율 {over:.1f}%")
 
 
+# ---------------- 6. 우리 투찰 성적 (비율·%p만 출력) ----------------
+def our_bids_analysis(df: pd.DataFrame) -> None:
+    section("6. 우리 투찰: 왜 1순위가 안 됐나 (공고명·금액 없이 비율만)")
+    v = analysis.my_bids_view(df)
+    if v is None or v.empty:
+        print("우리 투찰 기록 없음")
+        return
+    v = v[~v["bid_key"].astype(str).str.startswith("KEPCO")]
+    d = v[v["sajung"].notna() & v["sajung_bid"].notna()].copy()
+    print(f"우리 투찰 기록 {len(v)}건 중 실제 사정율까지 나온 공고 {len(d)}건")
+    if d.empty:
+        return
+    d["우리-실제"] = d["sajung"] - d["sajung_bid"]
+    has_w = d["winner_sajung"].notna()
+    d["결과분류"] = np.where(d["우리-실제"] < 0, "하한 미달(너무 낮게)",
+                         np.where(has_w & (d["sajung"] >= d["winner_sajung"]), "가격 밀림(너무 높게)", "1순위 구간"))
+    print(d["결과분류"].value_counts().to_string())
+    print(f"우리-실제 사정율: 중앙 {d['우리-실제'].median():+.3f}%p · 절대값 중앙 {d['우리-실제'].abs().median():.3f}%p")
+    w = d[has_w]
+    print(f"낙찰 구간 폭(1순위-실제) 중앙 {(w['winner_sajung'] - w['sajung_bid']).median():.4f}%p · "
+          f"밀렸을 때 1순위보다 높았던 정도 중앙 {(w['sajung'] - w['winner_sajung'])[w['sajung'] >= w['winner_sajung']].median():.3f}%p · "
+          f"하한 미달일 때 모자랐던 정도 중앙 {(-d['우리-실제'][d['우리-실제'] < 0]).median():.3f}%p")
+    rk = pd.to_numeric(d["my_rank"], errors="coerce")
+    print("우리 순위 분포:", pd.cut(rk[rk > 0], [0, 1, 3, 10, 50, 100, 1e6],
+                                   labels=["1", "2~3", "4~10", "11~50", "51~100", "100~"]).value_counts(sort=False).to_dict(),
+          f"(순위 없음·하한미달 {int((rk.fillna(0) <= 0).sum())})")
+    p = d["participants"]
+    exp_win = (1 / p[p > 0]).sum()
+    print(f"참가업체 중앙 {p.median():.0f}곳 → 아무렇게나 넣었을 때 기대 1순위 {exp_win:.2f}건 (실제 1순위 "
+          f"{int((d['결과분류'] == '1순위 구간').sum())}건)")
+    # 추천 금액이 있었던 공고: 추천대로였으면?
+    if "rec_amount" in d:
+        a = d["a_value"].fillna(0)
+        r = d["lower_rate"] / 100
+        d["추천사정율"] = ((d["rec_amount"] - a) / r + a) / d["base_amt"] * 100
+        rr = d[d["추천사정율"].notna() & has_w]
+        if len(rr):
+            win = ((rr["추천사정율"] >= rr["sajung_bid"]) & (rr["추천사정율"] < rr["winner_sajung"])).sum()
+            low = (rr["추천사정율"] < rr["sajung_bid"]).sum()
+            print(f"추천 금액이 있던 {len(rr)}건: 추천대로였으면 1순위 {win}건 · 하한미달 {low}건 · "
+                  f"추천-실제 중앙 {(rr['추천사정율'] - rr['sajung_bid']).median():+.3f}%p · "
+                  f"우리 실제 투찰-추천 중앙 {(rr['sajung'] - rr['추천사정율']).median():+.3f}%p")
+    sc = analysis.pick_scorecard(df)
+    if sc is not None and len(sc):
+        cols = [c for c in sc.columns if "결과" in c]
+        if cols:
+            print("개찰 전 기록한 추천(성적표) 결과:", sc[cols[0]].value_counts().to_dict(), f"(총 {len(sc)}건)")
+
+
 def small_org_bids() -> pd.DataFrame:
     df = analysis.load_dataset()
     d = analysis.apply_filters(df[df["open_date"].notna()], keywords=analysis.company_keywords())
@@ -213,6 +262,10 @@ def main() -> None:
     if done.empty:
         print("분석할 공고 없음")
         return
+    try:
+        our_bids_analysis(df)
+    except Exception as e:  # noqa: BLE001
+        print("[our_bids_analysis 실패]", e)
     for f in (qualification_analysis, org_analysis, prelim_analysis, competitor_analysis, participant_analysis):
         try:
             f(done)
