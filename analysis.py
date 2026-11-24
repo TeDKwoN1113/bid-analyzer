@@ -59,6 +59,10 @@ def _raw_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
                 cache = None   # 오래됐거나, 항목이 바뀌었거나, 과거 자료를 새로 채웠으면 전체 다시
         except Exception:  # noqa: BLE001  손상된 파일은 무시하고 전체 다시 받기
             cache = None
+    # 자동 수집(GitHub Actions) 안에서는 방금(10분 안) 받은 표를 그대로 씀: 한 실행 안에서 여러 단계·알림이
+    # 같은 표를 매번 다시 받으면 무료 전송량(월 5GB)을 금방 넘김. 사이트는 항상 최신으로 받음.
+    if cache is not None and os.environ.get("GITHUB_ACTIONS") and (now - cache["at"]).total_seconds() < 600:
+        return cache["base"], cache["regions"], cache["licenses"]
     if cache is None:
         base = db.query_df_big(_BASE_SQL)
         regs = db.query_df_big("SELECT bid_key, region FROM regions")
