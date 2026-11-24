@@ -549,3 +549,26 @@ def test_regional_joint_contract_excluded_outside_our_region(monkeypatch):
                       "region": ["부산광역시", "울산광역시 남구", "부산광역시"]})
     r = analysis.limit_reasons(d)
     assert "지역의무공동도급" in r.iloc[0] and r.iloc[1] == "" and r.iloc[2] == ""
+
+
+def test_parse_single_item_body_and_d2b_lists():
+    """국방 상세처럼 body.item 에 한 건이 바로 오는 응답도 읽어야 함 (예전엔 빈칸으로 저장됐음)."""
+    import json as _j
+
+    import api_client
+    import d2b
+
+    class R:
+        def __init__(self, t):
+            self.text = t
+
+        def json(self):
+            return _j.loads(self.text)
+    items, _ = api_client._parse(R('{"response":{"header":{"resultCode":"00"},"body":{"item":'
+                                   '{"areaLmttList":"[19] 충청남도","scsbidLwltRt":89.745}}}}'))
+    assert items and items[0]["areaLmttList"] == "[19] 충청남도"
+    assert d2b._split_list("[6202] 기계설비,가스공사업") == ["[6202] 기계설비,가스공사업"]
+    assert d2b._split_list("[19] 충청남도, [26] 부산광역시") == ["[19] 충청남도", "[26] 부산광역시"]
+    tb = d2b.map_notice({"pblancNo": "X1", "orntCode": "UMM", "pblancOdr": 1, "baseAmnt": 2.5e8, "cntrwkNm": "전기공사"},
+                        items[0])
+    assert tb["regions"][0]["region"] == "[19] 충청남도" and tb["bids"][0]["lower_rate"] == 89.745

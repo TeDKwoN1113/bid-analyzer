@@ -121,8 +121,16 @@ def keys(r: dict) -> tuple[str, str, str]:
 
 
 def _split_list(x) -> list[str]:
+    """'[19] 충청남도, [26] 부산광역시' → 항목별. 이름 안의 쉼표('[6202] 기계설비,가스공사업')는 나누지 않음."""
     import re
-    return [p.strip() for p in re.split(r"[,/|;\n]", str(x or "")) if p.strip()]
+    s = str(x or "").strip()
+    if not s or s.lower() in ("none", "null"):
+        return []
+    if "[" in s:
+        parts = re.split(r"\s*[,/|;\n]\s*(?=\[)", s)
+    else:
+        parts = re.split(r"[|;\n]", s)
+    return [p.strip() for p in parts if p.strip()]
 
 
 def on_g2b(no) -> bool:
@@ -366,6 +374,12 @@ def auto(progress=print, quick: bool = False) -> str:
     today = date.today()
     b = BUDGET_QUICK if quick else BUDGET_FULL
     msgs = []
+    if db.get_kv("d2b_parse_v2") != "done":
+        # 예전에는 상세 응답(body.item 한 건)을 못 읽어 지역제한·면허·하한율·기초금액이 빠졌음 → 공고·결과 다시 받기
+        db.execute("DELETE FROM limit_checks WHERE op IN ('d2b_notice', 'd2b_result')")
+        db.execute("DELETE FROM kv WHERE k = 'd2b_backfill_to'")
+        db.set_kv("d2b_parse_v2", "done")
+        msgs.append("상세 다시 받기 시작")
     try:
         n1, s1 = collect_notices(today - timedelta(days=3 if quick else NOTICE_DAYS), today, progress,
                                  budget=b["notice"])

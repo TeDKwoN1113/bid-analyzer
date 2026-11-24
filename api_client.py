@@ -61,9 +61,13 @@ def _parse(resp: requests.Response) -> tuple[list[dict], int]:
     if code not in ("00", "0", "000"):
         _raise(code, str(header.get("resultMsg", "")))
     body = r.get("body", {}) or {}
-    items = body.get("items") or []
-    if isinstance(items, dict):
+    # 보통은 body.items.item 이지만, 상세 조회(국방 등)는 body.item 에 한 건이 바로 오기도 함
+    items = body.get("items")
+    if not items and body.get("item"):
+        items = body["item"]               # body.item: 한 건(dict) 또는 여러 건(list)
+    elif isinstance(items, dict):
         items = items.get("item") or []
+    items = items or []
     if isinstance(items, dict):
         items = [items]
     total = int(body.get("totalCount") or len(items))
