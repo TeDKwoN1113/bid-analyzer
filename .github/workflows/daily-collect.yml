@@ -11,10 +11,10 @@ on:
   workflow_dispatch:              # Actions 화면에서 "Run workflow" 버튼으로 바로 실행
     inputs:
       mode:
-        description: "full = 전체 수집, quick = 빠른 수집(오늘 공고·개찰결과만), inspect = 공고 점검(아래 공고번호)"
+        description: "full = 전체 수집, quick = 빠른 수집(오늘 공고·개찰결과만), inspect = 공고 점검(아래 공고번호), backtest = 추천 방식 공정 시험"
         default: full
         type: choice
-        options: [full, quick, inspect]
+        options: [full, quick, inspect, backtest]
       bids:
         description: "inspect 때 공고번호 (쉼표로 여러 개, 예: R26BK01816770)"
         default: ""
@@ -67,8 +67,11 @@ jobs:
         env:
           BIDS: ${{ inputs.bids }}
         run: python inspect_bid.py "$BIDS"
+      - name: 추천 방식 공정 시험 (수동 실행)
+        if: github.event_name != 'schedule' && inputs.mode == 'backtest'
+        run: python backtest_report.py
       - name: 알림 보내기
-        if: always() && steps.sched.outputs.skip != 'true' && inputs.mode != 'inspect'
+        if: always() && steps.sched.outputs.skip != 'true' && inputs.mode != 'inspect' && inputs.mode != 'backtest'
         run: python notify.py
       - name: 분석 표 캐시 저장
         if: always()

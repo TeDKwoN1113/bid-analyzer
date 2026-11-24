@@ -1,0 +1,53 @@
+"""추천 방식 공정 시험(백테스트) 보고: 각 공고마다 '그 공고 이전 자료만'으로 사정율을 골랐다면 1순위였는지.
+
+무작위로 넣었을 때 기대값(1/참가업체수 합)과 비교하고, 우연일 확률(포아송)도 함께 출력.
+공개 실행 기록에 남으므로 공고명·금액 등 개별 내용은 출력하지 않고 합계만 출력.
+사용: python backtest_report.py [시험 일수=270] [최대 공고=800]
+"""
+import math
+import sys
+
+import pandas as pd
+
+import analysis
+
+
+def p_at_least(k: int, lam: float) -> float:
+    """무작위 기대 lam 일 때 k건 이상 나올 확률."""
+    if lam <= 0:
+        return float("nan")
+    return 1 - sum(math.exp(-lam) * lam ** i / math.factorial(i) for i in range(k))
+
+
+def main(days: int = 270, max_tests: int = 800) -> None:
+    df = analysis.load_dataset()
+    summary, detail = analysis.backtest(df, analysis.company_keywords(), test_days=days, max_tests=max_tests,
+                                        eligible_only=True)
+    if summary.empty:
+        print("시험할 공고 없음")
+        return
+    summary["우연일 확률(%)"] = [round(p_at_least(int(k), float(l)) * 100, 1)
+                              for k, l in zip(summary["1순위"], summary["무작위 기대 1순위"])]
+    pd.set_option("display.width", 250)
+    pd.set_option("display.max_columns", 30)
+    print(f"=== 공정 시험: 최근 {days}일 우리 참가 가능·개찰 완료 공고 (최대 {max_tests}건) ===")
+    print(summary.to_string(index=False))
+    # 시기별(앞/뒤 절반)로 나눠도 같은 결론인지
+    if len(detail):
+        mid = detail["개찰일"].median()
+        for name, part in (("앞 절반", detail[detail["개찰일"] < mid]), ("뒤 절반", detail[detail["개찰일"] >= mid])):
+            g = part.groupby("방식")
+            t = pd.DataFrame({"공고": g.size(), "1순위": g["결과"].apply(lambda x: int((x == "1순위").sum())),
+                              "무작위 기대": g["무작위 기대"].sum().round(2),
+                              "하한 미달률(%)": g["결과"].apply(lambda x: round((x == "하한 미달").mean() * 100, 1))})
+            print(f"\n--- {name} ---")
+            print(t.to_string())
+        # 추천 사정율과 실제 사정율 차이 (치우침 점검)
+        d = detail.assign(차이=detail["추천 사정율"] - detail["실제 사정율"])
+        print("\n--- 추천 - 실제 사정율 (중앙, %p) ---")
+        print(d.groupby("방식")["차이"].median().round(3).to_string())
+
+
+if __name__ == "__main__":
+    a = [int(x) for x in sys.argv[1:3]]
+    main(*a)
