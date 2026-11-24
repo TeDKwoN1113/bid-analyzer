@@ -693,6 +693,70 @@ def update_my_bids(progress=None, scan_limit: int = 200) -> str:
     return msg
 
 
+def refresh_my_results(max_bids: int = 10, days: int = 14) -> str:
+    """사이트에서 '우리 투찰'을 열 때: 개찰 시간이 지났는데 결과가 아직 없는 우리 투찰을 공고번호로 바로 조회.
+
+    개찰순위(업체별 금액) → 참가업체수·1순위·우리 순위와 실제 금액, 예비가격 상세 → 예정가격(실제 사정율).
+    자동 수집(하루 몇 번)을 기다리지 않고 개찰 직후 바로 결과를 볼 수 있게 함."""
+    c = db.company()
+    biz = _biz(c["bizno"])
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    nows = datetime.now().strftime("%Y-%m-%d %H:%M")
+    q = db.query_df("""SELECT m.bid_key, m.amount, m.my_rank, b.open_dt, p.plan_price, o.participants
+                       FROM my_bids m JOIN bids b ON b.bid_key = m.bid_key
+                       LEFT JOIN plans p ON p.bid_key = m.bid_key LEFT JOIN openings o ON o.bid_key = m.bid_key
+                       WHERE b.open_dt IS NOT NULL AND b.open_dt <= :now AND b.open_dt >= :since""",
+                    {"now": nows, "since": since})
+    if q.empty:
+        return "확인할 공고 없음"
+    q = q[~q["bid_key"].astype(str).str.startswith(("D2B", "KEPCO"))]
+    need = q[q["my_rank"].isna() | q["plan_price"].isna() | q["participants"].isna()].head(max_bids)
+    n_done, n_found, err = 0, 0, ""
+    for r in need.itertuples():
+        no, ord_ = r.bid_key.rsplit("-", 1)
+        try:
+            items = api_client.call_all("ranks", {"bidNtceNo": no, "bidNtceOrd": ord_})
+            rows = [map_rank(r.bid_key, x) for x in items]
+            ranked = sorted((x for x in rows if x["rank"] > 0), key=lambda x: x["rank"])
+            if ranked:
+                ours = next((x for x in rows if biz and _biz(x["bizno"]) == biz), None)
+                keep = ranked[:100] + ([ours] if ours and ours not in ranked[:100] else [])
+                db.upsert_many("ranks", keep)
+                if pd.isna(r.participants):
+                    f = ranked[0]
+                    db.upsert_many("openings", [{"bid_key": r.bid_key, "open_dt": r.open_dt, "participants": len(rows),
+                                                 "status": "개찰완료", "first_company": f["company"],
+                                                 "first_bizno": f["bizno"], "first_amt": f["amount"],
+                                                 "first_rate": f["rate"]}])
+                if ours:
+                    n_found += 1
+                    db.execute("UPDATE my_bids SET my_rank = :r, checked_at = :t, amount = :a, sajung = NULL, "
+                               "amount_source = '개찰순위(실제)', rec_amount = COALESCE(rec_amount, :old) "
+                               "WHERE bid_key = :k", {"r": int(ours["rank"]), "t": db.now(), "a": ours["amount"],
+                                                       "old": r.amount, "k": r.bid_key})
+                elif biz:
+                    db.execute("UPDATE my_bids SET my_rank = 0, checked_at = :t WHERE bid_key = :k",
+                               {"t": db.now(), "k": r.bid_key})
+            if pd.isna(r.plan_price):
+                pre = api_client.call_all("prelim_prices", {"inqryDiv": load_settings()["inqry_div_bidno"].get(
+                    "prelim_prices", "2"), "bidNtceNo": no, "bidNtceOrd": ord_})
+                batches: dict[str, list] = {}
+                for x in pre:
+                    for table, row in map_prelim(x):
+                        if row.get("bid_key"):
+                            batches.setdefault(table, []).append(row)
+                for table, rows_ in batches.items():
+                    db.upsert_many(table, rows_)
+            n_done += 1
+        except api_client.QuotaError as e:
+            err = f" (호출 한도: {e})"
+            break
+        except api_client.ApiError as e:
+            err = f" (오류: {str(e)[:80]})"
+            continue
+    return f"개찰 확인 {n_done}건 · 우리 순위 찾음 {n_found}건{err}"
+
+
 def collect_ranks_auto(progress=None) -> dict:
     s = load_settings()
     todo = pending_rank_bids(s["rank_max_bids_per_run"])

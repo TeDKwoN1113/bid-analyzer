@@ -514,3 +514,29 @@ def test_license_groups_need_all_in_group():
                        "demand_org": ["", ""], "method": ["", ""], "name": ["승강기 교체", "전기공사"]})
     ok = analysis.eligible(df, company_region="울산", company_licenses=["전기공사업"])
     assert list(ok) == [False, True]
+
+
+def test_refresh_my_results_fills_rank_and_plan(df, monkeypatch):
+    """개찰 시간이 지난 우리 투찰은 공고번호로 바로 조회해 순위·실제 금액·예정가격을 채움."""
+    import api_client
+    past = df[df["open_date"] < pd.Timestamp.now()].iloc[0]
+    key = past["bid_key"]
+    no, ord_ = key.rsplit("-", 1)
+    db.execute("DELETE FROM plans WHERE bid_key = :k", {"k": key})
+    db.upsert_many("my_bids", [{"bid_key": key, "amount": None, "sajung": None, "memo": "t", "my_rank": None,
+                                "checked_at": None, "created_at": db.now(), "rec_amount": 123.0, "amount_source": None}])
+    monkeypatch.setattr(db, "company", lambda: {"bizno": "1112233333", "region": "울산", "licenses": ["전기공사업"]})
+
+    def fake(op, params, max_pages=200):
+        if op == "ranks":
+            return [{"opengRank": "1", "prcbdrBizno": "999", "prcbdrNm": "가", "bidprcAmt": "1000"},
+                    {"opengRank": "2", "prcbdrBizno": "111-22-33333", "prcbdrNm": "우리", "bidprcAmt": "1001"}]
+        return [{"bidNtceNo": no, "bidNtceOrd": ord_, "compnoRsrvtnPrceSno": "1", "bsisPlnprc": "10",
+                 "drwtYn": "Y", "plnprc": "1050", "bssamt": "1000", "rlOpengDt": past["open_dt"]}]
+    monkeypatch.setattr(api_client, "call_all", fake)
+    msg = collector.refresh_my_results(days=3650)
+    assert "우리 순위 찾음 1건" in msg, msg
+    m = db.query_df("SELECT * FROM my_bids WHERE bid_key = :k", {"k": key}).iloc[0]
+    assert int(m["my_rank"]) == 2 and float(m["amount"]) == 1001
+    assert len(db.query_df("SELECT * FROM plans WHERE bid_key = :k", {"k": key})) == 1
+    db.execute("DELETE FROM my_bids WHERE bid_key = :k", {"k": key})

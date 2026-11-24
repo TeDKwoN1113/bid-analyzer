@@ -680,6 +680,21 @@ elif page == "📝 우리 투찰":
             _clear_caches()
             st.success("저장했습니다.")
 
+    # 개찰 시간이 지났는데 결과가 없는 우리 투찰은 들어올 때 바로 조회 (10분에 한 번)
+    if not use_sample and settings.get("service_key"):
+        _last = st.session_state.get("_my_refresh_at")
+        _force = st.button("🔄 개찰결과 지금 불러오기", help="개찰 시간이 지난 우리 투찰의 순위·실제 사정율을 바로 조회합니다.")
+        if _force or _last is None or (pd.Timestamp.now() - _last).total_seconds() > 600:
+            st.session_state["_my_refresh_at"] = pd.Timestamp.now()
+            with st.spinner("개찰결과 확인 중…"):
+                try:
+                    _msg = collector.refresh_my_results()
+                except Exception as e:  # noqa: BLE001
+                    _msg = f"개찰결과 확인 실패: {e}"
+            if "개찰 확인 0건" not in _msg and "없음" not in _msg:
+                _clear_caches()
+                raw = _load(use_sample)
+            st.caption(f"개찰결과 자동 확인: {_msg}")
     v = analysis.my_bids_view(raw)
     if v.empty:
         st.info("아직 기록이 없습니다. 투찰 계산기에서 '투찰 기록 저장'을 누르거나 위에서 추가하세요. "
