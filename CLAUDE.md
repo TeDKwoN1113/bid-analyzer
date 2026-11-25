@@ -31,6 +31,9 @@
 - 수동 실행: Actions `daily-collect.yml` 의 mode(full·quick·inspect·backtest·expert). 실행 중 새로 넣으면 대기 중인 실행이
   취소되므로 하나씩 순서대로.
 
+- **대표에게 알려주는 추천 금액은 사이트·텔레그램과 같은 하나만** (`inspect_bid.py DEEP:` 의 ★ 최종 추천).
+  검증 안 된 별도 계산 금액을 따로 추천하지 않는다 (헷갈림). 다른 계산은 '참고'로만.
+
 ## 일하는 방식
 - 사용자는 프로그래밍 경험이 없는 회사 대표. 설명은 쉬운 한국어로, 사용자가 할 일은 단계별로.
 - 비밀값(API 키, DB 주소, 토큰, 비밀번호)은 채팅·코드·커밋에 절대 넣지 않는다. Streamlit Secrets / GitHub Secrets 에만.
@@ -42,3 +45,7 @@
 - 나라장터(조달청 API), 국방전자조달(방위사업청 API, 공고번호 `D2B…`로 같은 표에 저장), 한전(전력데이터개방포털, 공고만 — 결과는 사용자가 직접 기록)
 - `collector.py` 수집 · `analysis.py` 분석·투찰금액 · `notify.py` 텔레그램 · `app.py` 사이트 · `kepco.py` 한전 · `d2b.py` 국방 · `tune.py` 주간 방식 검증
 - DB: Supabase(PostgreSQL). 사이트: https://ted-bid.streamlit.app · 자동 수집: GitHub Actions
+- GitHub 예약 실행은 자주 빠짐 → **DB 시계(Supabase pg_cron)** 가 정시에 `mode=scheduled` 수집과 `wake-site.yml`(사이트 깨우기)을
+  요청함. 설정: Actions mode=scheduler (`db_scheduler.py`, Secrets `DISPATCH_TOKEN` 2027-11-24 만료 — 만료 전 새로 만들어야 함).
+- 한전 API는 GitHub 서버에서 막혀 사이트 서버에서만 받음(로그인 화면만 열려도 받음). 결과는 kv `kepco_fetch_result`,
+  확인은 inspect `KEPCO`. 이번 달 DB 전송량 누적은 kv `egress_mb_YYYYMM`.
