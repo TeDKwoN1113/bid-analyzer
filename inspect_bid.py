@@ -200,6 +200,15 @@ def deep(no: str) -> None:
                   + " / ".join(f"{s_.quantile(q):.3f}" for q in (.1, .25, .5, .75, .9))
                   + f" · 낙찰구간 폭 중앙 {w_[w_ >= 0].median():.4f}%p · 참가 중앙 {h['participants'].median():.0f}")
     if pd.notna(r.get("base_amt")) and pd.notna(r.get("lower_rate")):
+        # 사이트·텔레그램과 똑같은 최종 추천 (기본 방식 + 이전 추천 유지 규칙) — 대표에게 알려줄 숫자는 이것 하나
+        hist = analysis.pick_history()
+        prev = analysis.prev_pick(hist, r["bid_key"])
+        fin = analysis.pick_bid(df, r, kw, prev=prev)
+        print(f"\n  ★ 최종 추천(사이트·알림과 같음): 방식 {analysis.STRATEGIES[analysis.current_strategy()]} · "
+              f"사정율 {fin['사정율']:.2f}% · 낙찰확률 {fin.get('낙찰확률')}% · 이전 추천 유지: {fin.get('이전 추천 유지')}")
+        for d_, s_h, _, p_h in hist.get(r["bid_key"], []):
+            print(f"     기록 {d_}: 사정율 {s_h:.2f}% (확률 {p_h}%)")
+        print("  (아래는 참고용 비교 — 대표에게 따로 추천하지 않음)")
         for mode in ("blend", "smooth30", "mean_sajung"):
             pk = analysis.pick_bid(df, r, kw, mode=mode)
             if pk:
