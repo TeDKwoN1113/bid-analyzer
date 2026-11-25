@@ -104,3 +104,22 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def health() -> str | None:
+    """DB 시계 요청이 최근 하루 동안 실패했으면 경고 문장 (토큰 만료·권한 문제 등). 정상이거나 설정 전이면 None."""
+    try:
+        with db.engine().begin() as c:
+            jobs = c.execute(text("SELECT count(*) FROM cron.job WHERE jobname LIKE :p"), {"p": PREFIX + "%"}).scalar()
+            if not jobs:
+                return None
+            bad = c.execute(text("SELECT status_code, count(*) FROM net._http_response "
+                                 "WHERE created > now() - interval '26 hours' AND coalesce(status_code, 0) <> 204 "
+                                 "GROUP BY 1")).fetchall()
+    except Exception:  # noqa: BLE001  pg_cron 이 없는 DB(샘플 등)
+        return None
+    if not bad:
+        return None
+    detail = ", ".join(f"HTTP {s or '응답없음'} {n}건" for s, n in bad)
+    hint = " — 토큰(DISPATCH_TOKEN)이 만료됐거나 권한이 바뀌었을 수 있음" if any(s in (401, 403, 404) for s, _ in bad) else ""
+    return f"DB 시계의 자동 수집 시작 요청이 실패했습니다 ({detail}){hint}. 그동안은 GitHub 예약 실행만 돕니다."

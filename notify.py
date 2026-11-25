@@ -452,3 +452,13 @@ if __name__ == "__main__":
     else:
         print(run(a.dry_run))
         print(f"알림 단계 DB 내려받은 양(대략): {db.read_mb():,.0f}MB")
+        try:  # DB 시계(정시 수집 시작) 고장 감시 — 하루 한 번만 경고
+            import db_scheduler
+            w = db_scheduler.health()
+            today = pd.Timestamp.now().strftime("%Y-%m-%d")
+            if w and not a.dry_run and db.get_kv("scheduler_warned") != today:
+                send("🚨 입찰 분석기 경고", html.escape(w))
+                db.set_kv("scheduler_warned", today)
+            print("DB 시계:", w or "정상")
+        except Exception as e:  # noqa: BLE001
+            print("DB 시계 점검 실패:", e)
