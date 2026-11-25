@@ -28,6 +28,8 @@ JOBS = [
     ("day", "23 0-9/2 * * 1-5"),        # 평일 09:23 ~ 17:23 2시간마다 — 빠른 수집
     ("hourly", "52 0-8 * * 1-5"),       # 평일 매시 52분 — 예비 (최근에 돌았으면 바로 끝남)
 ]
+# 사이트 깨우기(한전 공고는 사이트 서버에서만 받음) — 한국시간 06:37 09:37 12:37 15:37 18:37 21:37
+WAKE = ("wake_site", "37 21,0,3,6,9,12 * * *", "wake-site.yml")
 
 
 def _check_token(tok: str) -> None:
@@ -73,7 +75,9 @@ def main() -> None:
             c.execute(text("SELECT cron.unschedule(:n)"), {"n": name})
         for name, cron in JOBS:
             c.execute(text("SELECT cron.schedule(:n, :c, :cmd)"), {"n": PREFIX + name, "c": cron, "cmd": call})
-    print(f"DB 시계에 수집 예약 {len(JOBS)}개 등록 (GitHub 예약이 빠져도 정시에 시작)")
+        wake_call = call.replace(WORKFLOW, WAKE[2]).replace(',\"inputs\":{\"mode\":\"scheduled\"}', "")
+        c.execute(text("SELECT cron.schedule(:n, :c, :cmd)"), {"n": PREFIX + WAKE[0], "c": WAKE[1], "cmd": wake_call})
+    print(f"DB 시계에 수집 예약 {len(JOBS)}개 + 사이트 깨우기 1개 등록 (GitHub 예약이 빠져도 정시에 시작)")
     # 지금 한 번 보내서 실제로 되는지 확인
     with eng.begin() as c:
         rid = c.execute(text(call)).scalar()
