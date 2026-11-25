@@ -12,10 +12,10 @@ on:
   workflow_dispatch:              # Actions 화면에서 "Run workflow" 버튼으로 바로 실행
     inputs:
       mode:
-        description: "full = 전체 수집, quick = 빠른 수집(오늘 공고·개찰결과만), inspect = 공고 점검(아래 공고번호), backtest = 추천 방식 공정 시험, expert = 발주처·예가·경쟁사 분석, maint = 저장 공간 정리·압축"
+        description: "full = 전체 수집, quick = 빠른 수집(오늘 공고·개찰결과만), inspect = 공고 점검(아래 공고번호), backtest = 추천 방식 공정 시험, expert = 발주처·예가·경쟁사 분석, maint = 저장 공간 정리·압축, scheduled = 예약 수집처럼(필요할 때만), scheduler = DB 시계 예약 설정(DISPATCH_TOKEN 필요)"
         default: full
         type: choice
-        options: [full, quick, inspect, backtest, expert, maint]
+        options: [full, quick, inspect, backtest, expert, maint, scheduled, scheduler]
       bids:
         description: "inspect 때 공고번호 (쉼표로 여러 개, 예: R26BK01816770)"
         default: ""
@@ -55,7 +55,8 @@ jobs:
           restore-keys: dscache-
       - name: 예약 수집 (필요할 때만 전체/빠른 수집)
         id: sched
-        if: github.event_name == 'schedule'
+        # GitHub 예약 또는 DB 시계(Supabase pg_cron)가 보낸 mode=scheduled 요청
+        if: github.event_name == 'schedule' || inputs.mode == 'scheduled'
         run: python collector.py --scheduled
       - name: 전체 수집 (수동 실행)
         if: github.event_name != 'schedule' && inputs.mode == 'full'
@@ -77,8 +78,13 @@ jobs:
       - name: 저장 공간 정리 (수동 실행)
         if: github.event_name != 'schedule' && inputs.mode == 'maint'
         run: python collector.py --maintenance
+      - name: DB 시계 예약 설정 (수동 실행)
+        if: github.event_name != 'schedule' && inputs.mode == 'scheduler'
+        env:
+          DISPATCH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+        run: python db_scheduler.py
       - name: 알림 보내기
-        if: always() && steps.sched.outputs.skip != 'true' && inputs.mode != 'inspect' && inputs.mode != 'backtest' && inputs.mode != 'expert' && inputs.mode != 'maint'
+        if: always() && steps.sched.outputs.skip != 'true' && inputs.mode != 'inspect' && inputs.mode != 'backtest' && inputs.mode != 'expert' && inputs.mode != 'maint' && inputs.mode != 'scheduler'
         run: python notify.py
       - name: 분석 표 캐시 저장
         if: always()
