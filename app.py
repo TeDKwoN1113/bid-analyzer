@@ -433,6 +433,8 @@ if page == "🏠 오늘의 투찰":
             st.write(f"기초금액 **{won(r['base_amt'])}** · 하한율 "
                      f"{'-' if pd.isna(r['lower_rate']) else f'{r.lower_rate:.3f}%'}"
                      f"{'' if not a_val else ' · A값 ' + won(a_val)}")
+            if bool(r.get("lower_rate_default")):
+                st.caption("하한율은 국방 기본값 88.745%로 계산했어요 (공고 상세에 하한율이 없음 — 공고문으로 한 번 확인).")
             pc_min = analysis.pure_cost_min(r)
             st.caption(a_value_text(r) + (f" · 순공사원가 98% 하한 {pc_min:,}원" if pc_min else ""))
             if bool(analysis.lowest_price(pd.DataFrame([r])).iloc[0]):
