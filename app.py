@@ -356,8 +356,8 @@ if page == "🏠 오늘의 투찰":
         return e is not None and e <= analysis.FOCUS_MAX_PARTICIPANTS
     n_focus = sum(_focus(k) for k in todo.head(80)["bid_key"])
     if n_focus:
-        st.success(f"★ 집중 공고 {n_focus}건 — 과거 비슷한 공고에 {analysis.FOCUS_MAX_PARTICIPANTS}곳 이하만 들어와서 "
-                   "같은 노력으로 이길 확률이 2~3배 높은 공고입니다. 먼저 챙기세요.")
+        st.success(f"★ 집중 공고 {n_focus}건 — 경쟁이 상대적으로 적은 유형(지역범위·계약방식·금액대)입니다. "
+                   "공정 시험에서 이런 공고의 1순위 확률이 공고당 약 2배(4.6% 대 2.1%)였어요. 먼저 챙기세요.")
     order = st.radio("정렬", ["마감 임박순", "★ 경쟁 적은순", "낙찰확률 높은순"], horizontal=True,
                      label_visibility="collapsed")
     if order == "★ 경쟁 적은순":
@@ -413,7 +413,7 @@ if page == "🏠 오늘의 투찰":
             limit = r["allowed_regions"] or ("제한없음" if r["allowed_regions_known"] else "확인중")
             if exp_n.get(r["bid_key"]):
                 st.caption(("★ 집중 — " if _focus(r["bid_key"]) else "") +
-                           f"예상 참가 약 {exp_n[r['bid_key']]:.0f}곳 (과거 비슷한 공고 기준)")
+                           f"같은 유형 공고 보통 참가 약 {exp_n[r['bid_key']]:.0f}곳 (지역범위·계약방식·금액대 기준)")
             st.caption(f"{r['org']} · 참가지역 {limit} · 투찰마감 "
                        f"{'-' if pd.isna(r['close_date']) else r['close_date'].strftime('%m/%d %H:%M')} · "
                        f"개찰 {r['open_date'].strftime('%m/%d %H:%M')} · {r['contract_method'] or r['method'] or ''}")

@@ -133,7 +133,7 @@ def _focus_line(df, r) -> str:
     if e is None:
         return ""
     star = "⭐ 집중 — " if e <= analysis.FOCUS_MAX_PARTICIPANTS else ""
-    return f"\n  {star}예상 참가 약 {e:.0f}곳"
+    return f"\n  {star}같은 유형 보통 참가 약 {e:.0f}곳"
 
 
 def _more(lines: list[str], n: int) -> None:

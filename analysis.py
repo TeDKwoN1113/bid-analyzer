@@ -850,7 +850,7 @@ def expected_participants(tier_list) -> float | None:
     return None
 
 
-FOCUS_MAX_PARTICIPANTS = 150   # 예상 참가업체가 이 이하면 '★ 집중' (울산 지역제한 보통 350곳, 전국 1,000곳 안팎)
+FOCUS_MAX_PARTICIPANTS = 150   # 같은 유형 참가 중앙값이 이 이하면 '★ 집중' (2026-11-25 공정 시험: ★ 공고 1순위율 4.6% vs 나머지 2.1%)
 
 
 def _comp_group(d) -> pd.Series | str:
