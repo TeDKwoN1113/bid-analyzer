@@ -1,0 +1,50 @@
+name: 사이트 깨우기 (한전 공고 받기)
+
+# 한전 API는 GitHub 서버에서 접속이 막혀서 사이트(Streamlit) 서버에서만 받을 수 있음.
+# 아무도 사이트를 열지 않으면 한전 공고가 갱신되지 않으므로, 몇 시간마다 사이트를 자동으로 열어 둠.
+# (사이트 로그인 화면이 열리기만 해도 한전 공고를 받음 — 비밀번호는 쓰지 않음)
+on:
+  schedule:
+    - cron: "37 21,0,3,6,9,12 * * *"   # 한국 시간 06:37 09:37 12:37 15:37 18:37 21:37
+  workflow_dispatch:
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 브라우저 준비
+        run: |
+          pip install -q playwright==1.48.0
+          python -m playwright install --with-deps chromium > /dev/null
+      - name: 사이트 열기
+        run: |
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+          URL = "https://ted-bid.streamlit.app/"
+          with sync_playwright() as p:
+              b = p.chromium.launch()
+              page = b.new_page()
+              page.goto(URL, timeout=120000)
+              page.wait_for_timeout(5000)
+              # 잠들어 있으면 깨우기 버튼을 누름
+              for f in [page] + list(page.frames):
+                  try:
+                      btn = f.get_by_role("button", name="Yes, get this app back up!")
+                      if btn.count():
+                          btn.first.click()
+                          print("잠든 사이트 깨움")
+                          break
+                  except Exception:
+                      pass
+              page.wait_for_timeout(90000)   # 한전 공고 받는 동안 기다림
+              txt = " ".join(f.inner_text("body") for f in page.frames if f.url.startswith("http"))[:2000]
+              ok = "입찰 분석기" in txt
+              print("사이트 열림" if ok else "사이트 화면 확인 안 됨")
+              b.close()
+              if not ok:
+                  raise SystemExit("사이트가 열리지 않았습니다 (Streamlit 확인 필요)")
+          PY

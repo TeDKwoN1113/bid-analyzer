@@ -66,6 +66,15 @@ settings = load_settings()
 # ---------------- 로그인 (외부 접속 시 필수) ----------------
 _pw = settings.get("app_password") or os.environ.get("APP_PASSWORD", "")
 if _pw and not st.session_state.get("authed"):
+    if settings.get("service_key") and settings.get("kepco_api_key") and not st.session_state.get("kepco_bg"):
+        # 한전 공고는 사이트 서버에서만 받을 수 있음 → 로그인 화면만 열려도(자동 깨우기 포함) 받아 둠.
+        # 화면에는 아무것도 보여주지 않으므로 비밀번호 없이도 자료가 새지 않음
+        st.session_state["kepco_bg"] = True
+        try:
+            import kepco as _kepco
+            _kepco.refresh_if_stale()
+        except Exception:  # noqa: BLE001
+            pass
     st.title("⚡ 입찰 분석기")
     entered = st.text_input("비밀번호", type="password")
     if st.button("로그인", type="primary"):
