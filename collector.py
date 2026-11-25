@@ -861,6 +861,7 @@ if __name__ == "__main__":
     ap.add_argument("--to", dest="d2")
     ap.add_argument("--auto", action="store_true", help="최근 3일 + 과거 데이터 자동 채우기")
     ap.add_argument("--quick", action="store_true", help="어제·오늘 공고/기초금액/개찰결과만 빠르게")
+    ap.add_argument("--maintenance", action="store_true", help="저장 공간 정리·압축만")
     ap.add_argument("--scheduled", action="store_true",
                     help="예약 실행: 오늘 전체 수집이 안 됐으면 전체, 최근 2시간 반 안에 안 돌았으면 빠른 수집, 아니면 건너뜀")
     a = ap.parse_args()
@@ -890,6 +891,10 @@ if __name__ == "__main__":
                 with open(os.environ["GITHUB_OUTPUT"], "a") as f:
                     f.write("skip=true\n")
             raise SystemExit(0)
+    if a.maintenance:
+        print(maintenance(print))
+        print(f"DB {db.size_mb() or 0:,.0f}MB")
+        raise SystemExit(0)
     if a.auto or a.quick:
         try:
             import notify

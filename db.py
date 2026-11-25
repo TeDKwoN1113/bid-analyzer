@@ -332,7 +332,7 @@ def table_sizes() -> pd.DataFrame:
            FROM pg_catalog.pg_stat_user_tables ORDER BY pg_total_relation_size(relid) DESC""")
 
 
-PRELIM_KEEP_DAYS = 30  # 예비가격 15개 상세는 최근 30일 개찰분만 보관 (무료 500MB 한도 — 예정가격·사정율은 plans 에 계속 남음)
+PRELIM_KEEP_DAYS = 14  # 예비가격 15개 상세는 최근 14일 개찰분만 보관 (무료 500MB 한도 — 예정가격·사정율은 plans 에 계속 남음)
 
 
 def _nontarget_sql(keywords: list[str]) -> tuple[str, dict]:

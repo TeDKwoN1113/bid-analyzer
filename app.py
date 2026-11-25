@@ -1288,7 +1288,7 @@ elif page == "⬇️ 데이터 수집":
                        "사이트가 멈추지 않도록 매일 새벽 자동 수집 때 합니다.")
         with st.expander("테이블별 용량"):
             st.dataframe(db.table_sizes(), hide_index=True, use_container_width=True)
-            st.caption("자동 수집이 매일 정리합니다: 우리 업종이 아닌 공고(딸린 자료 포함), 30일 지난 예비가격 15개 상세. "
+            st.caption("자동 수집이 매일 정리합니다: 우리 업종이 아닌 공고(딸린 자료 포함), 14일 지난 예비가격 15개 상세. "
                        "(예정가격·사정율은 남아서 분석에 지장 없음)")
     st.subheader("🩺 데이터 점검 (최근 30일 개찰 공고)")
     hd = analysis.data_health(analysis.load_dataset())
