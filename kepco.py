@@ -165,9 +165,15 @@ def refresh_if_stale(hours: float = 3, days: int = 14) -> str | None:
         return None
     db.set_kv("kepco_fetched_at", pd.Timestamp.now().isoformat())   # 실패해도 매번 재시도하지 않도록 먼저 기록
     today = date.today()
-    rows = [map_row(x) for x in fetch(today - timedelta(days=days), today, timeout=20)]
+    try:
+        rows = [map_row(x) for x in fetch(today - timedelta(days=days), today, timeout=20)]
+    except Exception as e:  # noqa: BLE001  실패 이유를 남겨 점검에서 드러나게 (조용히 0건 처리 금지)
+        db.set_kv("kepco_fetch_result", f"{pd.Timestamp.now():%Y-%m-%d %H:%M} 실패: "
+                  + re.sub(r"apiKey=[^&\s']+", "apiKey=***", str(e))[:200])
+        raise
     rows = [x for x in rows if x["bid_no"]]
     db.upsert_many("kepco_bids", rows)
+    db.set_kv("kepco_fetch_result", f"{pd.Timestamp.now():%Y-%m-%d %H:%M} 성공: {len(rows)}건")
     return f"한전 공고 {len(rows)}건 갱신"
 
 
