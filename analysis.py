@@ -1235,6 +1235,16 @@ def my_bids_view(df: pd.DataFrame) -> pd.DataFrame:
               "plan_price", "first_amt"]:
         if c in v.columns:
             v[c] = pd.to_numeric(v[c], errors="coerce")
+    # 분석(추천) 금액: 투찰 기록 때 저장한 추천 금액, 없으면 개찰 전에 기록된 마지막 추천(추천 성적표)
+    try:
+        pl = db.query_df("SELECT bid_key, day, amount AS pl_amount FROM pick_log ORDER BY bid_key, day")
+        if len(pl):
+            last = pl.groupby("bid_key").tail(1)
+            last = last.assign(bid_no=last["bid_key"].str.rsplit("-", n=1).str[0]).drop_duplicates("bid_no", keep="last")
+            v = v.merge(last[["bid_no", "pl_amount"]], on="bid_no", how="left")
+            v["rec_amount"] = v["rec_amount"].fillna(pd.to_numeric(v["pl_amount"], errors="coerce"))
+    except Exception:  # noqa: BLE001
+        pass
     a = v["a_value"].fillna(0)
     r = v["lower_rate"] / 100
     # 금액만 적었으면 사정율 역산, 사정율만 적었으면 금액 계산

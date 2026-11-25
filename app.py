@@ -762,19 +762,33 @@ elif page == "📝 우리 투찰":
     for c_ in ("rec_amount", "amount_source"):
         if c_ not in v:
             v[c_] = None
-    show = v.sort_values("open_date", ascending=False)[
-        ["결과", "name", "org", "open_dt", "amount", "amount_source", "rec_amount", "sajung", "sajung_bid",
-         "winner_sajung", "my_rank", "participants", "first_company", "memo", "bid_key"]].rename(columns={
-            "name": "공고명", "org": "기관", "open_dt": "개찰일시", "amount": "우리 금액",
-            "amount_source": "금액 출처", "rec_amount": "추천 금액", "sajung": "우리 사정율",
+    vv = v.sort_values("open_date", ascending=False).copy()
+    first_amt = pd.to_numeric(vv["win_ref_amt"] if "win_ref_amt" in vv else vv["first_amt"], errors="coerce")
+    vv["1순위 금액"] = first_amt
+    vv["실제-1순위"] = pd.to_numeric(vv["amount"], errors="coerce") - first_amt
+    vv["분석-1순위"] = pd.to_numeric(vv["rec_amount"], errors="coerce") - first_amt
+    a_ = vv["a_value"].fillna(0)
+    r_ = vv["lower_rate"] / 100
+    vv["분석 사정율"] = ((pd.to_numeric(vv["rec_amount"], errors="coerce") - a_) / r_ + a_) / vv["base_amt"] * 100
+    show = vv[["결과", "name", "open_dt", "amount", "rec_amount", "1순위 금액", "실제-1순위", "분석-1순위",
+               "my_rank", "participants", "sajung", "분석 사정율", "sajung_bid", "winner_sajung", "first_company",
+               "amount_source", "org", "memo", "bid_key"]].rename(columns={
+            "name": "공고명", "org": "기관", "open_dt": "개찰일시", "amount": "실제 투찰금액",
+            "amount_source": "금액 출처", "rec_amount": "분석 금액", "sajung": "우리 사정율",
             "sajung_bid": "실제 사정율", "winner_sajung": "1순위 사정율", "my_rank": "우리 순위",
             "participants": "참가수", "first_company": "1순위 업체", "memo": "메모", "bid_key": "공고번호"})
+    money = st.column_config.NumberColumn(format="localized")
     st.dataframe(show, hide_index=True, use_container_width=True,
-                 column_config={"우리 금액": st.column_config.NumberColumn(format="%d"),
-                                "추천 금액": st.column_config.NumberColumn(format="%d"),
+                 column_config={"실제 투찰금액": money, "분석 금액": money, "1순위 금액": money,
+                                "실제-1순위": st.column_config.NumberColumn(format="localized", help="양수(+)면 1순위보다 비싸게 넣음"),
+                                "분석-1순위": st.column_config.NumberColumn(format="localized",
+                                                                         help="분석 금액대로 넣었다면 1순위와 차이"),
                                 "우리 사정율": st.column_config.NumberColumn(format="%.3f"),
+                                "분석 사정율": st.column_config.NumberColumn(format="%.3f"),
                                 "실제 사정율": st.column_config.NumberColumn(format="%.3f"),
                                 "1순위 사정율": st.column_config.NumberColumn(format="%.3f")})
+    st.caption("실제 투찰금액 = 개찰순위에서 우리 사업자번호로 찾은 금액 · 분석 금액 = 개찰 전 시스템 추천 금액 · "
+               "1순위 금액 = 최종 낙찰자(없으면 개찰 1순위) 금액. 1순위가 되려면 '실제 사정율 이상 + 1순위 금액보다 낮게'.")
     st.caption("우리 금액: 개찰 후에는 개찰순위에서 사업자번호로 찾은 **실제 투찰금액**으로 자동으로 바뀝니다 "
                "(금액 출처 '개찰순위(실제)'). 개찰 전이거나 못 찾았으면 기록한 금액입니다.")
     with st.expander("✏️ 실제 투찰금액 고치기"):
