@@ -445,7 +445,8 @@ def compact(limit_mb: float) -> list[str]:
             w = 0
         if n and n > 0 and w > 0 and heap > 0:
             live_heap = n * (w + 28) / 1048576
-            est[t] = min(mb, live_heap * (mb / heap) * 1.2 + 1)
+            # 색인은 새로 만들면 행 수에 비례 (지운 자리로 부푼 지금 색인 크기 비율을 쓰면 과대 추정)
+            est[t] = min(mb, live_heap * 1.2 + n * 60 / 1048576 + 1)
         else:
             est[t] = mb
     done = []
@@ -457,7 +458,15 @@ def compact(limit_mb: float) -> list[str]:
             continue  # 줄어들 게 거의 없음
         cur = size_mb() or 0
         if cur + mb >= limit_mb * 0.99:
-            done.append(f"{t} 건너뜀(여유 부족)")
+            # 여유가 모자라면 먼저 색인만 새로 만들어(필요 공간 작음) 부푼 색인 공간을 돌려받고 다시 확인
+            try:
+                with engine().connect().execution_options(isolation_level="AUTOCOMMIT") as c:
+                    c.execute(text(f"REINDEX TABLE {t}"))
+                cur = size_mb() or 0
+            except Exception as e:  # noqa: BLE001
+                done.append(f"{t} 색인 재구성 실패({str(e)[:40]})")
+        if cur + mb >= limit_mb * 0.99:
+            done.append(f"{t} 건너뜀(여유 부족, 현재 {cur:.0f}MB + 필요 {mb:.0f}MB)")
             continue
         try:
             with engine().connect().execution_options(isolation_level="AUTOCOMMIT") as c:
