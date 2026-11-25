@@ -374,6 +374,10 @@ def auto(progress=print) -> dict:
         summary[label] = res
         if progress:
             progress(f"{label}: {res['count']:,}건, {msg}  [누적 내려받음 {db.read_mb():,.0f}MB]")
+    if backfilled:
+        # 과거 자료를 새로 채웠으면 분석 표 캐시를 한 번 전체 다시 받게 표시.
+        # 분석 표를 처음 쓰는 단계(지역·면허 재확인)보다 먼저 표시해야 한 실행에서 전체를 두 번 받지 않음
+        db.set_kv("dataset_full_reload_after", pd.Timestamp.now().isoformat())
     try:
         import d2b
         summary["국방"] = d2b.auto(progress)
@@ -396,9 +400,6 @@ def auto(progress=print) -> dict:
     except Exception as e:  # noqa: BLE001
         if progress:
             progress(f"지역·면허 재확인 실패: {e}")
-    if backfilled:
-        # 과거 자료를 새로 채웠으면 분석 표 캐시를 한 번 전체 다시 받게 표시
-        db.set_kv("dataset_full_reload_after", pd.Timestamp.now().isoformat())
     if progress:
         progress(f"[누적 내려받음 {db.read_mb():,.0f}MB] 국방·한전·지역면허 확인 후")
     r = collect_ranks_auto()
