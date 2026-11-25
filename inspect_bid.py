@@ -179,6 +179,18 @@ def deep(no: str) -> None:
     print("  적격심사 자가진단:", analysis.qual_check(r))
     print("  같은 유형(지역범위·계약방식·금액대) 보통 참가:", analysis.expected_competition(df, r), "| 유형:", analysis._comp_group(r))
     kw = analysis.bid_keywords(r)
+    # 지역의무공동도급·큰 금액 공고는 실적·협정 문턱 때문에 참가가 적다는 대표 의견 → 과거 실제 참가 수 확인
+    done_all = df[df["participants"] > 0]
+    amt_all = done_all["est_price"].fillna(done_all["base_amt"] / 1.1)
+    jd = done_all[(done_all["joint_duty"].fillna("") == "Y") & (amt_all >= 1e9)]
+    if len(jd):
+        loc = jd[jd["region"].fillna("").str.contains("울산", regex=False)]
+        print(f"  과거 '지역의무공동도급 + 추정 10억↑' 공고 {len(jd)}건 참가 중앙 {jd['participants'].median():.0f}곳 "
+              f"(25~75%: {jd['participants'].quantile(.25):.0f}~{jd['participants'].quantile(.75):.0f}) · "
+              f"그중 울산 현장 {len(loc)}건 참가 중앙 {loc['participants'].median() if len(loc) else float('nan'):.0f}곳")
+    big = done_all[(amt_all >= 1e9) & (amt_all < 5e9) & done_all["region"].fillna("").str.contains("울산", regex=False)]
+    if len(big):
+        print(f"  과거 울산 현장 추정 10~50억 공고 {len(big)}건 참가 중앙 {big['participants'].median():.0f}곳")
     # 비교 공고 단계별 사정율 분포
     for name, h in analysis.tiers(df, r, kw):
         s_ = h["sajung"].dropna()
@@ -198,6 +210,23 @@ def deep(no: str) -> None:
                 if mode == "blend":
                     for x in analysis.evidence_lines(pk)[:8]:
                         print("     ·", x)
+        # 참가가 적을 때(50~250곳) 과거 공고만으로 계산한 추천 — 이 공고처럼 문턱이 있는 경우 대비
+        h0 = analysis._context(df, kw, db.company()["region"])["ind"]   # 참가 수로 거르기 전 같은 업종 전체
+        for lo_, hi_ in ((50, 250), (100, 400)):
+            hh = h0[h0["participants"].between(lo_, hi_)]
+            if analysis.n_windows(hh) >= 20:
+                for wd in (None, 0.3):
+                    cv = analysis.win_curve(hh, width=wd)
+                    pts = analysis.best_points(cv, top=3)
+                    if pts:
+                        p0 = pts[0]
+                        amt = analysis.bid_amount(r["base_amt"], p0["사정율"], r["lower_rate"], r["a_value"] or 0)
+                        print(f"\n  ▶ 참가 {lo_}~{hi_}곳 공고 {len(hh)}건 기준{' (넓게 평활)' if wd else ''}: 사정율 "
+                              f"{p0['사정율']:.3f}% · 투찰금액 {amt:,}원 · 과거 낙찰확률 {p0['낙찰확률']:.2f}% · 다른 후보 "
+                              + ", ".join(f"{x['사정율']:.2f}%({x['낙찰확률']:.2f}%)" for x in pts[1:]))
+                s_ = hh["sajung"].dropna()
+                print(f"     실제 사정율 10/25/50/75/90% = " + " / ".join(f"{s_.quantile(q):.3f}" for q in (.1, .25, .5, .75, .9))
+                      + f" · 낙찰구간 폭 중앙 {(hh['winner_sajung'] - hh['sajung']).clip(lower=0).median():.4f}%p")
         try:
             rk = analysis.load_ranks()
             lab, comp = analysis.likely_competitors(rk, r, df)
