@@ -118,9 +118,33 @@ def _load(sample: bool):
     return analysis.load_dataset()
 
 
+@st.cache_resource(ttl=900, max_entries=6)
+def _home_calc(_raw, raw_id, keys, lics, _phist):
+    """🏠 화면의 공고별 추천 금액·예상 참가 — 같은 자료·같은 공고면 다시 계산하지 않음 (화면 이동 속도)."""
+    rows = _raw[_raw["bid_key"].isin(set(keys))]
+    lp = analysis.lowest_price(rows)
+    picks, exp_n = {}, {}
+    for i, r in rows.iterrows():
+        if lp.get(i, False):
+            continue   # 최저가 내역서 입찰: 사정율 추천 안 함
+        kw_ = analysis.bid_keywords(r, list(lics))
+        exp_n[r["bid_key"]] = analysis.expected_competition(_raw, r, kw_)
+        if pd.notna(r["base_amt_notice"]) and pd.notna(r["lower_rate"]):
+            picks[r["bid_key"]] = analysis.pick_bid(_raw, r, kw_, prev=analysis.prev_pick(_phist, r["bid_key"]))
+    return picks, exp_n
+
+
+@st.cache_resource(ttl=900, max_entries=200)
+def _competitors(_raw, raw_id, bid_key, sample):
+    r = _raw[_raw["bid_key"] == bid_key].iloc[0]
+    return analysis.likely_competitors(_ranks(sample), r, _raw)
+
+
 def _clear_caches():
     st.cache_data.clear()
     _load.clear()
+    _home_calc.clear()
+    _competitors.clear()
 
 
 if not use_sample and settings.get("kepco_api_key"):
@@ -163,8 +187,8 @@ def _kepco_all(sample: bool):
     return kepco.load()
 
 
-@st.cache_data(ttl=3600)
-def _ranks(sample: bool):
+@st.cache_resource(ttl=3600, max_entries=2)
+def _ranks(sample: bool):   # 한 벌만 보관 (cache_data 는 부를 때마다 복사본을 만들어 느림)
     db.use_sample(sample)
     return analysis.load_ranks()
 df = analysis.apply_filters(
@@ -324,16 +348,8 @@ if page == "🏠 오늘의 투찰":
         return "오늘 마감" if d == 0 else f"D-{d}"
 
     # 기초금액 공개 공고는 미리 투찰금액·낙찰확률 계산 (정렬용)
-    picks, exp_n = {}, {}
     phist = analysis.pick_history()
-    _lp = analysis.lowest_price(todo.head(80))
-    for _, r in todo.head(80).iterrows():
-        if _lp.get(_, False):
-            continue   # 최저가 내역서 입찰: 사정율 추천 안 함
-        kw_ = analysis.bid_keywords(r, sel_lics or _lics)
-        exp_n[r["bid_key"]] = analysis.expected_competition(raw, r, kw_)
-        if pd.notna(r["base_amt_notice"]) and pd.notna(r["lower_rate"]):
-            picks[r["bid_key"]] = analysis.pick_bid(raw, r, kw_, prev=analysis.prev_pick(phist, r["bid_key"]))
+    picks, exp_n = _home_calc(raw, id(raw), tuple(todo.head(80)["bid_key"]), tuple(sel_lics or _lics), phist)
 
     def _focus(k):
         e = exp_n.get(k)
@@ -471,7 +487,7 @@ if page == "🏠 오늘의 투찰":
                     f"– {x['공고명'][:28]} ({x['개찰일']}): 실제 {x['실제']:.2f} / 낙찰자 {x['1순위']:.2f} → **{x['결과']}**"
                     for x in ex))
             with st.expander("🏢 예상 경쟁사"):
-                lab, comp = analysis.likely_competitors(_ranks(use_sample), r, raw)
+                lab, comp = _competitors(raw, id(raw), r["bid_key"], use_sample)
                 if comp.empty:
                     st.caption("개찰순위 데이터가 쌓이면 표시됩니다.")
                 else:
