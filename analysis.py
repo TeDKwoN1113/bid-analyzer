@@ -1019,7 +1019,20 @@ STRATEGIES = {
     "blend_range": "⑦ 현재 방식 + 예가범위 맞춤",
     "smooth15": "⑧ 넓게 평활 0.15%p",
     "smooth30": "⑨ 넓게 평활 0.30%p",
+    "blend_type": "⑩ 참가 수 유형 맞춤",
 }
+
+
+def type_matched(tl, df, row, lo: float = 0.4, hi: float = 2.5):
+    """유형(지역범위·계약방식·금액대)으로 예측한 참가 수의 lo~hi 배 공고만 각 단계에 남김 (충분할 때)."""
+    e = expected_competition(df, row)
+    if not e:
+        return tl
+    out = []
+    for n, h in tl:
+        c = h[h["participants"].between(e * lo, e * hi)] if "participants" in h else h
+        out.append((n, c if n_windows(c) >= (5 if n.startswith("같은 기관") else 20) else h))
+    return out
 LABEL_TO_MODE = {v: k for k, v in STRATEGIES.items()}
 
 
@@ -1061,6 +1074,8 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True,
         tl = tl[:1]
     elif mode == "region_only" and reg_tiers and n_windows(reg_tiers[0][1]) >= 5:
         tl = reg_tiers
+    elif mode == "blend_type":
+        tl = type_matched(tl, df, row)
     elif mode == "blend_range":
         tl = [(n, same_range(h, row, 5 if n.startswith("같은 기관") else 20)) for n, h in tl]
     curve, weights = blend(tl)
@@ -1386,6 +1401,8 @@ def strategy_picks(hist: pd.DataFrame, row, keywords) -> dict:
     # 넓게 평활해서 '실제 사정율이 자주 나오고 경쟁사가 덜 몰린 넓은 구간'의 중심을 고름
     for wd, label in ((0.15, "⑧ 넓게 평활 0.15%p"), (0.3, "⑨ 넓게 평활 0.30%p")):
         out[label] = _pick_from_curve(win_curve(tl[0][1], width=wd))
+    _COMP_CACHE.clear()
+    out["⑩ 참가 수 유형 맞춤"] = _pick_from_curve(blend(type_matched(tl, hist, row))[0])
     out["⑦ 현재 방식 + 예가범위 맞춤"] = _pick_from_curve(blend(
         [(n, same_range(h, row, 5 if n.startswith("같은 기관") else 20)) for n, h in tl])[0])
     out["⑤ 단순 평균 (사정율 평균)"] = round(float(tl[0][1]["sajung"].mean()), 2)
