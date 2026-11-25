@@ -161,6 +161,8 @@ def refresh_if_stale(hours: float = 3, days: int = 14) -> str | None:
     if not api_key():
         return None
     last = db.get_kv("kepco_fetched_at")
+    if "성공" not in str(db.get_kv("kepco_fetch_result") or ""):
+        hours = min(hours, 0.25)   # 지난번에 실패했거나 기록이 없으면 15분 뒤 다시 시도
     if last and pd.Timestamp.now() - pd.Timestamp(last) < pd.Timedelta(hours=hours):
         return None
     db.set_kv("kepco_fetched_at", pd.Timestamp.now().isoformat())   # 실패해도 매번 재시도하지 않도록 먼저 기록
