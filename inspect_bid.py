@@ -253,6 +253,11 @@ if __name__ == "__main__":
         load_settings()
         eligibility_summary()
         sys.exit(0)
+    if sys.argv[1:] and sys.argv[1].strip().upper() == "KEPCO":
+        load_settings()
+        print("한전 마지막으로 받은 때:", db.get_kv("kepco_fetched_at"))
+        print(db.query_df("SELECT COUNT(*) AS 공고, MAX(notice_dt) AS 최근공고일 FROM kepco_bids").to_string(index=False))
+        sys.exit(0)
     if sys.argv[1:] and sys.argv[1].strip().upper() == "D2BTEST":
         load_settings()
         d2b_selftest()
