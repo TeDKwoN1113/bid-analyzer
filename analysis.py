@@ -1343,7 +1343,12 @@ def backtest(df: pd.DataFrame, keywords, test_days: int = 90, max_tests: int = 3
         if hist["sajung"].notna().sum() < min_history:
             continue
         kw_r = bid_keywords(r)
-        picks = strategy_picks(hist, r, kw_r if tuple(kw_r) != kw_all or not kw_all else list(kw_all))
+        kw_use = kw_r if tuple(kw_r) != kw_all or not kw_all else list(kw_all)
+        picks = strategy_picks(hist, r, kw_use)
+        try:
+            exp_p = expected_participants(tiers(hist, r, kw_use))   # 그 공고 이전 자료로 예측한 참가업체 수
+        except Exception:  # noqa: BLE001
+            exp_p = None
         p = r["participants"]
         for name, s_ in picks.items():
             if s_ is None:
@@ -1359,7 +1364,8 @@ def backtest(df: pd.DataFrame, keywords, test_days: int = 90, max_tests: int = 3
             rows.append({"방식": name, "bid_key": r["bid_key"], "공고명": r["name"], "개찰일": r["open_date"],
                          "추천 사정율": s_, "실제 사정율": r["sajung"], "1순위 사정율": r["winner_sajung"],
                          "결과": res, "가상 순위": vrank, "순위 있음": comp is not None,
-                         "무작위 기대": (1 / p) if pd.notna(p) and p > 0 else np.nan})
+                         "무작위 기대": (1 / p) if pd.notna(p) and p > 0 else np.nan,
+                         "예상 참가": exp_p, "실제 참가": p})
     detail = pd.DataFrame(rows)
     if detail.empty:
         return detail, detail

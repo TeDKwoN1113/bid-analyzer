@@ -7,6 +7,7 @@
 import math
 import sys
 
+import numpy as np
 import pandas as pd
 
 import analysis
@@ -42,6 +43,24 @@ def main(days: int = 270, max_tests: int = 800) -> None:
                               "하한 미달률(%)": g["결과"].apply(lambda x: round((x == "하한 미달").mean() * 100, 1))})
             print(f"\n--- {name} ---")
             print(t.to_string())
+        # ---- ⭐ 집중 공고(예상 참가 ≤150) 예측이 맞나 ----
+        cur = analysis.STRATEGIES[analysis.current_strategy()]
+        z = detail[detail["방식"] == cur].copy()
+        if "예상 참가" in z and z["예상 참가"].notna().any():
+            z["⭐"] = z["예상 참가"] <= analysis.FOCUS_MAX_PARTICIPANTS
+            g = z.groupby("⭐")
+            t = pd.DataFrame({"공고": g.size(), "실제 참가 중앙": g["실제 참가"].median(),
+                              "실제 150곳 이하 비율(%)": g["실제 참가"].apply(lambda x: round((x <= 150).mean() * 100, 1)),
+                              "1순위": g["결과"].apply(lambda x: int((x == "1순위").sum())),
+                              "무작위 기대": g["무작위 기대"].sum().round(2)})
+            t["공고당 1순위(%)"] = (t["1순위"] / t["공고"] * 100).round(2)
+            print(f"\n=== ⭐ 집중 공고 예측 점검 ({cur}) — 개찰 전 자료만으로 예측 ===")
+            print(t.to_string())
+            ok = z.dropna(subset=["예상 참가", "실제 참가"])
+            if len(ok) > 10:
+                err = (ok["예상 참가"] - ok["실제 참가"]).abs() / ok["실제 참가"].clip(lower=1)
+                print(f"예상 참가 오차(상대) 중앙 {err.median() * 100:.0f}% · 상관 "
+                      f"{np.corrcoef(np.log1p(ok['예상 참가']), np.log1p(ok['실제 참가']))[0, 1]:.2f}")
         # ---- 경쟁 공고(참가 200곳 이상)만: 우리가 실제로 넣는 공고 유형 ----
         pmap = df.set_index("bid_key")["participants"]
         c = detail.assign(p=detail["bid_key"].map(pmap))
