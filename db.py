@@ -475,3 +475,25 @@ def compact(limit_mb: float) -> list[str]:
         except Exception as e:  # noqa: BLE001
             done.append(f"{t} 실패({str(e)[:60]})")
     return done
+
+
+def _record_month_egress() -> None:
+    """자동 수집(GitHub Actions) 실행이 끝날 때 이번 달 누적 내려받은 양을 기록 (무료 전송량 월 5GB 감시).
+    사이트에서 보는 양은 포함되지 않으므로 실제 사용량은 이보다 조금 많음."""
+    mb = read_mb()
+    if not os.environ.get("GITHUB_ACTIONS") or mb < 0.5:
+        return
+    try:
+        if not is_remote():
+            return
+        k = "egress_mb_" + datetime.now().strftime("%Y%m")
+        total = float(get_kv(k) or 0) + mb
+        set_kv(k, f"{total:.1f}")
+        print(f"이번 달 자동 수집 DB 내려받은 양 누적(대략): {total:,.0f}MB / 무료 한도 5,000MB"
+              + ("  ⚠️ 한도의 70% 넘음" if total > 3500 else ""))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+import atexit  # noqa: E402
+atexit.register(_record_month_egress)
