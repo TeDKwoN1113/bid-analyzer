@@ -281,6 +281,33 @@ if page == "🏠 오늘의 투찰":
     recent = recent[recent["plan_price"].notna() | recent["first_company"].notna()]
     mine = db.query_df("SELECT bid_key, amount FROM my_bids")
     mine_map = dict(zip(mine["bid_key"].str.rsplit("-", n=1).str[0], mine["amount"]))  # 공고번호 기준
+    try:  # 진행 관리 (관심·참가신청·투찰 완료·메모) — DB 에 저장해 휴대폰·컴퓨터 어디서나 같이 보임
+        _trk = db.query_df("SELECT * FROM bid_track")
+    except Exception:  # noqa: BLE001
+        _trk = pd.DataFrame()
+    track = {str(x["bid_no"]): x for x in _trk.to_dict("records")} if len(_trk) else {}
+
+    def _t(no) -> dict:
+        return track.get(str(no), {})
+
+    def _memo(no) -> str:
+        m = _t(no).get("memo")
+        return m.strip() if isinstance(m, str) else ""
+
+    def _tags(r) -> list[str]:
+        t, out = _t(r["bid_no"]), []
+        if t.get("fav"):
+            out.append("⭐관심")
+        q = analysis.reg_deadline(pd.DataFrame([r])).iloc[0]
+        if pd.notna(q) and q >= now and not t.get("joined"):
+            out.append("⛔등록필요")
+        if t.get("joined"):
+            out.append("📋등록완료")
+        if t.get("bid_done") or r["bid_no"] in mine_map:
+            out.append("✅투찰완료")
+        if _memo(r["bid_no"]):
+            out.append("📝메모")
+        return out
 
     if only_ok:
         _all = analysis.apply_filters(raw, keywords=keywords, regions=regions, max_amt=amt_range[1] * 1e8,
@@ -341,6 +368,22 @@ if page == "🏠 오늘의 투찰":
         md = pick_day.split("(")[0]
         todo = todo[todo["마감기준"].dt.strftime("%m/%d") == md]
 
+    # ── 빠른 필터 (버튼마다 건수) ──
+    _reg = analysis.reg_deadline(todo)
+    _nos = todo["bid_no"]
+    _masks = {
+        "오늘 마감": todo["마감기준"].dt.normalize() == now.normalize(),
+        "3일 내 마감": todo["마감기준"] <= now + pd.Timedelta(days=3),
+        "⛔ 참가등록 필요": (_reg >= now) & ~_nos.map(lambda n: bool(_t(n).get("joined"))),
+        "⭐ 관심": _nos.map(lambda n: bool(_t(n).get("fav"))),
+        "📝 메모": _nos.map(lambda n: bool(_memo(n))),
+        "✅ 투찰 완료": _nos.map(lambda n: bool(_t(n).get("bid_done")) or n in mine_map),
+    }
+    _chip_lab = {f"{k} {int(m.fillna(False).sum())}": k for k, m in _masks.items()}
+    chip = st.pills("빠른 필터", list(_chip_lab), key="quick_chip")
+    if chip:
+        todo = todo[_masks[_chip_lab[chip]].fillna(False).astype(bool)]
+
     c_a, c_b = st.columns([2, 1])
     only_base = c_a.toggle("기초금액 공개된 공고만", value=False)
     view = c_b.segmented_control("보기", ["카드", "표"], default="카드", key="today_view",
@@ -380,7 +423,7 @@ if page == "🏠 오늘의 투찰":
         st.caption("기초금액이 공개되어 투찰금액을 계산할 수 있는 공고부터, 과거 낙찰확률이 높은 순서입니다. "
                    "참가업체가 적은 공고일수록 확률이 높습니다.")
 
-    if view == "표" and len(todo):
+    if len(todo):
         def _dt_s(x):
             x = pd.to_datetime(x, errors="coerce", format="mixed")
             return "" if pd.isna(x) else x.strftime("%m/%d %H:%M")
@@ -402,12 +445,17 @@ if page == "🏠 오늘의 투찰":
                 "낙찰확률": f"{pk['낙찰확률']}%" if pk and pk.get("낙찰확률") is not None else "",
                 "예상 참가": ("★ " if _focus(r["bid_key"]) else "") + (f"{exp_n[r['bid_key']]:.0f}곳"
                                                                     if exp_n.get(r["bid_key"]) else ""),
-                "기록": "✅" if r["bid_no"] in mine_map else "",
+                "진행": " ".join(_tags(r)),
+                "메모": _memo(r["bid_no"]),
                 "공고": r["url"] if isinstance(r["url"], str) and r["url"].startswith("http") else None,
             })
-        cols_t = ["D-day", "공고명", "예상 참가", "💰 투찰금액", "사정율", "낙찰확률", "기초금액", "투찰마감", "개찰",
-                  "참가등록마감", "발주처", "참가지역", "추정가격", "기록", "공고"]
-        st.dataframe(pd.DataFrame(rows_t)[cols_t], hide_index=True, use_container_width=True,
+        cols_t = ["D-day", "공고명", "진행", "예상 참가", "💰 투찰금액", "사정율", "낙찰확률", "기초금액", "투찰마감", "개찰",
+                  "참가등록마감", "발주처", "참가지역", "추정가격", "메모", "공고"]
+        _xl = pd.DataFrame(rows_t)[cols_t]
+        st.download_button(f"📥 엑셀로 받기 (지금 보이는 {len(_xl)}건)", _xl.to_csv(index=False).encode("utf-8-sig"),
+                           file_name=f"투찰공고_{now:%Y%m%d}.csv", mime="text/csv", key="xl_today")
+    if view == "표" and len(todo):
+        st.dataframe(_xl, hide_index=True, use_container_width=True,
                      height=min(38 * (len(rows_t) + 1) + 4, 640),
                      column_config={"공고": st.column_config.LinkColumn("공고", display_text="열기"),
                                     "공고명": st.column_config.TextColumn(width="large")})
@@ -419,6 +467,23 @@ if page == "🏠 오늘의 투찰":
             link = f"[{r['name']}]({r['url']})" if isinstance(r["url"], str) and r["url"].startswith("http") else r["name"]
             top[0].markdown(("⭐ " if _focus(r["bid_key"]) else "") + f"**{link}**")
             top[1].markdown(f"**{dday(r['마감기준'])}**")
+            _tg = _tags(r)
+            if _tg:
+                st.markdown(" ".join(f"`{x}`" for x in _tg))
+            with st.expander("🗂 진행 관리 (관심 · 참가신청 · 투찰 · 메모)"):
+                _tt = _t(r["bid_no"])
+                with st.form(f"trk_{r['bid_key']}", border=False):
+                    k1, k2, k3 = st.columns(3)
+                    f_fav = k1.checkbox("⭐ 관심", value=bool(_tt.get("fav")))
+                    f_join = k2.checkbox("참가신청 완료", value=bool(_tt.get("joined")))
+                    f_bid = k3.checkbox("투찰 완료", value=bool(_tt.get("bid_done")) or r["bid_no"] in mine_map)
+                    f_memo = st.text_area("메모", value=_memo(r["bid_no"]), height=70,
+                                          placeholder="현장 확인, 협정 업체, 투찰 근거 등")
+                    if st.form_submit_button("저장"):
+                        db.upsert_many("bid_track", [{"bid_no": r["bid_no"], "fav": int(f_fav), "joined": int(f_join),
+                                                      "bid_done": int(f_bid), "memo": f_memo.strip(),
+                                                      "updated_at": db.now()}])
+                        st.rerun()
             limit = analysis.region_label(r)
             if exp_n.get(r["bid_key"]):
                 st.caption(("★ 집중 — " if _focus(r["bid_key"]) else "") +

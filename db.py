@@ -74,6 +74,10 @@ TABLES = {
         bid_key TEXT, amount DOUBLE PRECISION, sajung DOUBLE PRECISION, memo TEXT,
         my_rank INTEGER, checked_at TEXT, created_at TEXT, rec_amount DOUBLE PRECISION, amount_source TEXT
     """, ["bid_key"]),
+    # 공고별 진행 관리 (관심·참가신청·투찰 완료·메모) — 공고번호(차수 없이) 기준, 어디서 열어도 같이 보임
+    "bid_track": ("""
+        bid_no TEXT, fav INTEGER, joined INTEGER, bid_done INTEGER, memo TEXT, updated_at TEXT
+    """, ["bid_no"]),
     # 회사 정보 등 사이트·자동수집이 함께 쓰는 설정
     # 공고별 추천 기록 (날마다 마지막 추천) — 추천이 자주 바뀌지 않게, 바뀌면 이력 표시
     "pick_log": ("""
@@ -184,7 +188,7 @@ def _init(eng) -> None:
 
 
 WRITES = {"n": 0}  # 저장할 때마다 증가 → 분석 표 메모리 캐시 무효화용
-_NO_INVALIDATE = {"kv", "collect_log", "notified", "pick_log", "collect_days"}
+_NO_INVALIDATE = {"kv", "bid_track", "collect_log", "notified", "pick_log", "collect_days"}
 
 
 def upsert_many(table: str, rows: list[dict]) -> int:

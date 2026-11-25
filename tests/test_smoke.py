@@ -631,3 +631,26 @@ def test_detail_bid_and_region_label(monkeypatch):
     lab = analysis.region_label({"allowed_regions": "", "joint_duty": "Y", "region": "울산광역시 중구",
                                  "joint_rate": 30.0, "allowed_regions_known": True})
     assert lab.startswith("울산광역시+전국") and "30%" in lab
+
+
+def test_home_progress_tracking(df):
+    """진행 관리: 관심·메모 저장 → 오늘의 투찰 빠른 필터 건수·표시."""
+    from streamlit.testing.v1 import AppTest
+    db.use_sample(True)
+    now = pd.Timestamp.now()
+    up = df[(df["open_date"] >= now) & df["plan_price"].isna()]
+    if up.empty:
+        pytest.skip("샘플에 개찰 전 공고 없음")
+    no = up.iloc[0]["bid_no"]
+    db.upsert_many("bid_track", [{"bid_no": no, "fav": 1, "joined": 0, "bid_done": 0, "memo": "현장 확인",
+                                  "updated_at": db.now()}])
+    try:
+        at = AppTest.from_file(os.path.join(ROOT, "app.py"), default_timeout=120)
+        at.run()
+        assert not at.exception, at.exception
+        chips = [p for p in at.get("button_group") if "빠른 필터" in str(getattr(p, "label", ""))] if hasattr(at, "get") else []
+        assert not at.exception
+        if chips:
+            assert any("관심" in o for o in chips[0].options) and any("메모" in o for o in chips[0].options)
+    finally:
+        db.execute("DELETE FROM bid_track WHERE bid_no = :n", {"n": no})
