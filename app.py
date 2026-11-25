@@ -733,11 +733,13 @@ elif page == "📝 우리 투찰":
     if not use_sample and settings.get("service_key"):
         _last = st.session_state.get("_my_refresh_at")
         _force = st.button("🔄 개찰결과 지금 불러오기", help="개찰 시간이 지난 우리 투찰의 순위·실제 사정율을 바로 조회합니다.")
-        if _force or _last is None or (pd.Timestamp.now() - _last).total_seconds() > 600:
+        if _force or _last is None or (pd.Timestamp.now() - _last).total_seconds() > 1800:
             st.session_state["_my_refresh_at"] = pd.Timestamp.now()
             with st.spinner("개찰결과 확인 중…"):
                 try:
-                    _msg = collector.refresh_my_results(df=raw)
+                    # 자동 확인은 가볍게(최대 5건 + 새 공고 10건), 버튼을 누르면 넉넉하게
+                    _msg = collector.refresh_my_results(df=raw, max_bids=10 if _force else 5,
+                                                        scan_limit=30 if _force else 10)
                 except Exception as e:  # noqa: BLE001
                     _msg = f"개찰결과 확인 실패: {e}"
             if not ("개찰 확인 0건" in _msg and "새로 찾은 우리 투찰 0건" in _msg):
