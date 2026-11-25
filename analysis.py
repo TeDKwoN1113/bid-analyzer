@@ -13,7 +13,7 @@ _BASE_SQL = """
         SELECT b.bid_key, b.bid_no, b.bid_ord, b.name, b.org, b.demand_org, b.region,
                b.main_type, b.method, b.contract_method, b.notice_dt, b.close_dt, b.open_dt, b.est_price,
                b.lower_rate, b.url, b.spec_docs, b.ntce_kind, b.qual_dt, b.begin_dt,
-               b.perf_limit, b.pq, b.designated, b.ability_list, b.joint_duty,
+               b.perf_limit, b.pq, b.designated, b.ability_list, b.joint_duty, b.detail_bid, b.joint_rate,
                ba.base_amt AS base_amt_notice, ba.a_value, ba.range_begin, ba.range_end,
                ba.a_apply, ba.pure_cost, ba.a_detail,
                p.plan_price, p.base_amt AS base_amt_open,
@@ -244,10 +244,26 @@ def lowest_price(df: pd.DataFrame) -> pd.Series:
     txt = df["method"].fillna("").astype(str) + " " + df["contract_method"].fillna("").astype(str) \
         if "method" in df and "contract_method" in df else pd.Series("", index=df.index)
     lp = txt.str.contains("최저가", regex=False)
+    if "detail_bid" in df:
+        # 내역입찰 = 내역서·도면 검토 후 견적 (적격심사 공고는 사정율 방식 그대로)
+        lp |= (df["detail_bid"].fillna("") == "Y") & ~txt.str.contains("적격", regex=False)
     if "org_part_median" in df and "org_part_n" in df:
         lp |= (df["org_part_n"].fillna(0) >= 3) & (df["org_part_median"] <= SMALL_ORG_PARTICIPANTS) & \
             txt.str.contains("경쟁", regex=False)
     return lp
+
+
+def region_label(r) -> str:
+    """참가지역 표시: 지역제한 목록 → 지역의무공동도급이면 '현장지역+전국(○%)' → 제한없음/확인중."""
+    allowed = str(r.get("allowed_regions") or "")
+    if allowed:
+        return allowed
+    if str(r.get("joint_duty") or "") == "Y":
+        site = str(r.get("region") or "").split(" ")[0] or "현장지역"
+        rate = r.get("joint_rate")
+        rt = f" {float(rate):.0f}%" if rate is not None and pd.notna(rate) else ""
+        return f"{site}+전국 (지역의무공동도급{rt})"
+    return "제한없음" if r.get("allowed_regions_known") else "확인중"
 
 
 def reg_deadline(df: pd.DataFrame) -> pd.Series:
@@ -412,6 +428,14 @@ def limit_reasons(df: pd.DataFrame) -> pd.Series:
     block = [x.strip() for x in (db.get_kv("block_orgs", "") or "").split(",") if x.strip()]
     if block and "org" in df:
         add(df["org"].fillna("").map(lambda o: any(x in o for x in block)), "제외 기관(설정)")
+    # 내역입찰(내역서 제출)인데 현장이 다른 지역 → 민간·대학 등 견적형 공고가 대부분이라 제외 (2026-11-25 대표 확인:
+    # 서울 등우빌딩 기숙사·총신대 기숙사 "안 됨"). 울산 현장이면 최저가 내역서 입찰(💲)로 참가 가능.
+    if "detail_bid" in df and db.get_kv("allow_detail_bid_elsewhere", "0") != "1":
+        reg_ = db.company()["region"] or ""
+        site_ = df["region"].fillna("") if "region" in df else pd.Series("", index=df.index)
+        allowed_ = df["allowed_regions"].fillna("") if "allowed_regions" in df else pd.Series("", index=df.index)
+        local_ = site_.str.contains(reg_, regex=False) | allowed_.str.contains(reg_, regex=False) if reg_ else False
+        add((df["detail_bid"].fillna("") == "Y") & ~local_, "내역입찰(다른 지역 — 견적형)")
     # 지역의무공동도급: 공사 현장 지역 업체와 반드시 공동도급 (예: 부산 공사 → 부산 업체 49% 이상 + 전국 업체)
     # 우리 지역 공사면 우리가 지역 업체라 문제없음. 다른 지역이면 그 지역 업체와 손잡아야 해서 기본은 제외.
     if "joint_duty" in df and db.get_kv("allow_joint_duty", "0") != "1":

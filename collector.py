@@ -78,6 +78,8 @@ def map_bid(r: dict) -> list[tuple[str, dict]]:
         "designated": g(r, "dsgntCmptYn"),                     # 지명경쟁 여부
         "ability_list": (str(g(r, "cnstrtnAbltyEvlAmtList", default="") or "")[:500] or None),  # 시공능력평가금액 제한
         "joint_duty": g(r, "rgnDutyJntcontrctYn"),             # 지역의무공동도급 여부
+        "detail_bid": g(r, "dtlsBidYn"),                       # 내역입찰 여부 (내역서 제출 — 민간·대학 등 최저가 견적형이 많음)
+        "joint_rate": num(g(r, "rgnDutyJntcontrctRt")),        # 지역의무공동도급 지역업체 비율(%)
     })]
 
 
@@ -327,6 +329,13 @@ def auto(progress=print) -> dict:
     summary = {}
     backfilled = False
     _cleanup(progress)  # 채우기 전에 먼저 공간 확보 (무료 한도 500MB)
+    if db.get_kv("bidlist_fields_v3") != "done":
+        # 내역입찰·지역의무공동도급 비율 항목을 채우려고 최근 45일 공고 목록을 다시 받음 (한 번만)
+        for i in range(45):
+            db.execute("DELETE FROM collect_days WHERE op = 'bid_list' AND day = :d",
+                       {"d": (date.today() - timedelta(days=i)).isoformat()})
+        db.set_kv("bidlist_fields_v3", "done")
+        db.set_kv("bidlist_fields_v2", "done")
     if db.get_kv("bidlist_fields_v2") != "done":
         # 새로 추가한 참가자격 항목(실적·PQ·지명·시공능력)을 채우려고 최근 45일 공고 목록을 다시 받음 (한 번만)
         for i in range(45):

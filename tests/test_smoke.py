@@ -617,3 +617,17 @@ def test_partner_license_joint_contract(monkeypatch):
     d = pd.DataFrame({"license_groups": [both, fire_only, (("전기공사업/0037",),)]})
     monkeypatch.setattr(analysis, "partner_keywords", lambda: ["소방"])
     assert list(analysis.needs_partner(d, lic)) == [True, False, False]
+
+
+def test_detail_bid_and_region_label(monkeypatch):
+    """내역입찰(다른 지역)은 제외, 울산이면 💲. 지역의무공동도급 울산 현장은 '울산광역시+전국'으로 표시."""
+    monkeypatch.setattr(db, "company", lambda: {"bizno": "", "region": "울산", "licenses": ["전기공사업"]})
+    d = pd.DataFrame({"name": ["기숙사 리모델링", "울산 내역입찰"], "detail_bid": ["Y", "Y"],
+                      "region": ["서울특별시 동대문구", "울산광역시 남구"], "allowed_regions": ["", ""],
+                      "method": ["", ""], "contract_method": ["제한경쟁", "제한경쟁"]})
+    r = analysis.limit_reasons(d)
+    assert "내역입찰" in r.iloc[0] and r.iloc[1] == ""
+    assert bool(analysis.lowest_price(d).iloc[1])
+    lab = analysis.region_label({"allowed_regions": "", "joint_duty": "Y", "region": "울산광역시 중구",
+                                 "joint_rate": 30.0, "allowed_regions_known": True})
+    assert lab.startswith("울산광역시+전국") and "30%" in lab

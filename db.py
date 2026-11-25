@@ -23,7 +23,7 @@ TABLES = {
         notice_dt TEXT, close_dt TEXT, open_dt TEXT,
         est_price DOUBLE PRECISION, lower_rate DOUBLE PRECISION, url TEXT, spec_docs TEXT, ntce_kind TEXT,
         qual_dt TEXT, begin_dt TEXT, perf_limit TEXT, pq TEXT, designated TEXT, ability_list TEXT,
-        joint_duty TEXT
+        joint_duty TEXT, detail_bid TEXT, joint_rate DOUBLE PRECISION
     """, ["bid_key"]),
     # 참가가능지역 (없으면 지역제한 없음)
     "regions": ("""

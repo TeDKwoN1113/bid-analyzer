@@ -382,7 +382,7 @@ if page == "🏠 오늘의 투찰":
                 "D-day": dday(r["마감기준"]),
                 "공고명": r["name"],
                 "발주처": r["org"],
-                "참가지역": r["allowed_regions"] or ("제한없음" if r["allowed_regions_known"] else "확인중"),
+                "참가지역": analysis.region_label(r),
                 "추정가격": won(r["est_price"]) if pd.notna(r["est_price"]) else "",
                 "기초금액": won(r["base_amt"]) if pd.notna(r["base_amt_notice"]) else "미공개",
                 "참가등록마감": _dt_s(r.get("qual_dt")) if analysis.is_d2b(r["bid_key"]) else "",
@@ -410,7 +410,7 @@ if page == "🏠 오늘의 투찰":
             link = f"[{r['name']}]({r['url']})" if isinstance(r["url"], str) and r["url"].startswith("http") else r["name"]
             top[0].markdown(("⭐ " if _focus(r["bid_key"]) else "") + f"**{link}**")
             top[1].markdown(f"**{dday(r['마감기준'])}**")
-            limit = r["allowed_regions"] or ("제한없음" if r["allowed_regions_known"] else "확인중")
+            limit = analysis.region_label(r)
             if exp_n.get(r["bid_key"]):
                 st.caption(("★ 집중 — " if _focus(r["bid_key"]) else "") +
                            f"같은 유형 공고 보통 참가 약 {exp_n[r['bid_key']]:.0f}곳 (지역범위·계약방식·금액대 기준)")

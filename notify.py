@@ -219,7 +219,7 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
         keys += [(k, "new") for k in new["bid_key"].iloc[DETAIL_MAX:]]
         for _, r in new.head(DETAIL_MAX).iterrows():
             amt = r["base_amt"] if pd.notna(r["base_amt"]) else r["est_price"]
-            limit = r["allowed_regions"] or ("제한없음" if r["allowed_regions_known"] else _e(r["region"]))
+            limit = analysis.region_label(r)
             lines.append(f"• {_title(r)}\n  {_e(r['org'])} | 참가지역 {_e(limit)}\n"
                          f"  {'기초' if pd.notna(r['base_amt']) else '추정'} {_won(amt)} | "
                          f"개찰 {_dt(r['open_dt'])} | {_e(r['contract_method'] or r['method'])}"
