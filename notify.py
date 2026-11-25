@@ -246,6 +246,8 @@ def build(df: pd.DataFrame | None = None) -> tuple[str, list[tuple[str, str]]]:
             is_lp = bool(analysis.lowest_price(pd.DataFrame([r])).iloc[0])
             pk = None if is_lp else analysis.pick_bid(df, r, analysis.bid_keywords(r),
                                                       prev=analysis.prev_pick(phist, r["bid_key"]))
+            if bool(r.get("lower_rate_diff")):
+                line += f"\n  ⚠️ 공고 상세 하한율 {r['lower_rate_api']:.3f}% (국방 기준 88.745%로 계산) — 공고문 확인"
             if is_lp:
                 line += f"\n  💲 {_e(analysis.LOWEST_NOTE)}"
             elif pk:

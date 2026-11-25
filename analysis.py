@@ -153,10 +153,13 @@ def _build_dataset() -> pd.DataFrame:
         (est_or_base.isna() | (est_or_base < D2B_NATIONWIDE_FROM))
     df.loc[d2b_small, "allowed_regions_known"] = False
     df["base_amt"] = df["base_amt_open"].fillna(df["base_amt_notice"])
-    # 국방 공고: 상세에 낙찰하한율이 없으면 국방 기본 88.745% (2026-11-24 대표 확인). 상세에 있으면 그 값 사용.
+    # 국방 공고 낙찰하한율은 금액과 상관없이 88.745% (2026-11-25 대표 확인) → 항상 이 값으로 계산.
+    # 공고 상세 값이 다르면 표시해서 사용자가 확인하게 함.
     d2b_ = df["bid_key"].astype(str).str.startswith("D2B")
+    df["lower_rate_api"] = df["lower_rate"].where(d2b_)
     df["lower_rate_default"] = d2b_ & df["lower_rate"].isna()
-    df.loc[df["lower_rate_default"], "lower_rate"] = D2B_DEFAULT_LOWER_RATE
+    df["lower_rate_diff"] = d2b_ & df["lower_rate"].notna() & ((df["lower_rate"] - D2B_DEFAULT_LOWER_RATE).abs() > 1e-6)
+    df.loc[d2b_, "lower_rate"] = D2B_DEFAULT_LOWER_RATE
     # 예정가격: 예비가격 상세(정확) → 없으면 낙찰률·1순위 투찰률로 역산 (금액 ÷ 예정가격 대비 비율, 소수 3자리라 오차 ±0.001%p 미만)
     df["plan_price"] = pd.to_numeric(df["plan_price"], errors="coerce").astype(float)
     src = pd.Series(np.where(df["plan_price"].notna(), "예비가격", ""), index=df.index, dtype=object)
