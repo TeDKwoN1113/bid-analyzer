@@ -250,7 +250,7 @@ def win_chart(hist: pd.DataFrame, my_s: float | None = None, recs=None):
     fig.update_layout(xaxis_title="투찰 사정율(%)", yaxis=dict(title="낙찰확률(%)", rangemode="tozero"),
                       yaxis2=dict(title="하한 통과확률(%)", overlaying="y", side="right", range=[0, 100]),
                       height=420, legend=dict(orientation="h", y=1.12), margin=dict(t=40))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     return c
 
 
@@ -319,7 +319,7 @@ if page == "🏠 오늘의 투찰":
             with st.expander(f"🚫 참가 조건(실적·PQ·지명·시공능력) 때문에 뺀 공고 {len(_out)}건"):
                 st.dataframe(_out[["이유", "name", "org", "open_dt"]].rename(
                     columns={"name": "공고명", "org": "기관", "open_dt": "개찰"}), hide_index=True,
-                    use_container_width=True)
+                    width="stretch")
                 st.caption("잘못 빠진 공고가 있으면 알려주세요. 실적이 있는 분야면 ⚙️ 설정에서 '실적제한 공고도 참가 가능'을 켤 수 있어요.")
     st.markdown(f"투찰 가능 **{len(todo)}건** · 3일 내 마감 "
                 f"**{(todo['마감기준'] <= now + pd.Timedelta(days=3)).sum()}건** · "
@@ -455,7 +455,7 @@ if page == "🏠 오늘의 투찰":
         st.download_button(f"📥 엑셀로 받기 (지금 보이는 {len(_xl)}건)", _xl.to_csv(index=False).encode("utf-8-sig"),
                            file_name=f"투찰공고_{now:%Y%m%d}.csv", mime="text/csv", key="xl_today")
     if view == "표" and len(todo):
-        st.dataframe(_xl, hide_index=True, use_container_width=True,
+        st.dataframe(_xl, hide_index=True, width="stretch",
                      height=min(38 * (len(rows_t) + 1) + 4, 640),
                      column_config={"공고": st.column_config.LinkColumn("공고", display_text="열기"),
                                     "공고명": st.column_config.TextColumn(width="large")})
@@ -566,7 +566,7 @@ if page == "🏠 오늘의 투찰":
                     st.caption("개찰순위 데이터가 쌓이면 표시됩니다.")
                 else:
                     st.caption(f"기준: {lab}의 개찰 상위권에 자주 나온 업체")
-                    st.dataframe(comp, hide_index=True, use_container_width=True,
+                    st.dataframe(comp, hide_index=True, width="stretch",
                                  column_config={"평균 사정율": st.column_config.NumberColumn(format="%.3f"),
                                                 "편차": st.column_config.NumberColumn(format="%.3f")})
                     near = comp[(comp["평균 사정율"] - pk["사정율"]).abs() <= 0.1]
@@ -598,7 +598,7 @@ if page == "🏠 오늘의 투찰":
             ["name", "org", "base_amt", "sajung", "first_company", "winner_sajung", "participants"]].rename(columns={
                 "name": "공고명", "org": "기관", "base_amt": "기초금액", "sajung": "실제 사정율",
                 "first_company": "1순위", "winner_sajung": "1순위 사정율", "participants": "참가수"}),
-            hide_index=True, use_container_width=True,
+            hide_index=True, width="stretch",
             column_config={"기초금액": st.column_config.NumberColumn(format="%d"),
                            "실제 사정율": st.column_config.NumberColumn(format="%.3f"),
                            "1순위 사정율": st.column_config.NumberColumn(format="%.3f")})
@@ -624,7 +624,7 @@ elif page == "📋 공고 현황":
                  .rename(columns={"bid_key": "공고번호", "name": "공고명", "org": "공고기관", "licenses": "면허제한",
                                   "base_amt": "기초금액", "lower_rate": "하한율", "open_dt": "개찰일시",
                                   "url": "링크"}),
-                 use_container_width=True, hide_index=True,
+                 width="stretch", hide_index=True,
                  column_config={"기초금액": st.column_config.NumberColumn(format="%d"),
                                 "링크": st.column_config.LinkColumn(display_text="열기")})
     st.subheader("개찰 결과")
@@ -635,7 +635,7 @@ elif page == "📋 공고 현황":
                                   "base_amt": "기초금액", "plan_price": "예정가격", "sajung": "사정율(%)",
                                   "participants": "참가수", "first_company": "1순위", "first_amt": "1순위 금액",
                                   "winner_sajung": "1순위 사정율(%)", "open_dt": "개찰일시"}),
-                 use_container_width=True, hide_index=True,
+                 width="stretch", hide_index=True,
                  column_config={"기초금액": st.column_config.NumberColumn(format="%d"),
                                 "예정가격": st.column_config.NumberColumn(format="%d"),
                                 "1순위 금액": st.column_config.NumberColumn(format="%d"),
@@ -668,13 +668,13 @@ elif page == "📊 사정율 분석":
     fig.add_histogram(x=d["winner_sajung"], xbins=dict(size=0.1), name="1순위 사정율", opacity=0.6)
     fig.update_layout(barmode="overlay", xaxis_title="사정율(%)", yaxis_title="건수", height=420,
                       legend=dict(orientation="h", y=1.1))
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     st.subheader("🎯 사정율별 낙찰확률 (과거 공고 재현)")
     rec = analysis.recommend(d)
     if rec:
         base_p = random_baseline(d)
-        st.dataframe(pd.DataFrame(rec), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(rec), hide_index=True, width="stretch")
         if base_p:
             st.caption(f"참고: 아무 사정율이나 넣었을 때 기대 낙찰확률(1/참가업체수 평균) ≈ {base_p:.2f}%")
     else:
@@ -689,18 +689,18 @@ elif page == "📊 사정율 분석":
                                    표준편차=("sajung", "std"), 일순위평균=("winner_sajung", "mean"))
               .query("건수 >= 3").sort_values("건수", ascending=False).round(4).reset_index()
               .rename(columns={"org": "기관", "일순위평균": "1순위 평균"}))
-        st.dataframe(by, hide_index=True, use_container_width=True)
+        st.dataframe(by, hide_index=True, width="stretch")
     with col2:
         st.subheader("월별 사정율 추이")
         m = d.set_index("open_date")["sajung"].resample("MS").mean().reset_index()
         st.plotly_chart(px.line(m, x="open_date", y="sajung", markers=True,
                                 labels={"open_date": "월", "sajung": "평균 사정율(%)"}),
-                        use_container_width=True)
+                        width="stretch")
 
     st.subheader("예비가격 번호별 추첨 빈도")
     dn = analysis.drawn_number_stats(d["bid_key"])
     if not dn.empty:
-        st.plotly_chart(px.bar(dn, x="번호", y="추첨횟수"), use_container_width=True)
+        st.plotly_chart(px.bar(dn, x="번호", y="추첨횟수"), width="stretch")
         st.caption("※ 번호 추첨은 원칙적으로 무작위입니다. 특정 번호 쏠림이 크지 않다면 참고만 하세요.")
 
 # ---------------- 투찰 계산기 ----------------
@@ -774,7 +774,7 @@ elif page == "🧮 투찰 계산기":
     win_chart(hist, my_s, rec)
     st.caption(WIN_HELP)
     tbl = analysis.sajung_table(hist, base, lr, a_val)
-    st.dataframe(tbl, hide_index=True, use_container_width=True, height=300,
+    st.dataframe(tbl, hide_index=True, width="stretch", height=300,
                  column_config={"투찰금액(원)": st.column_config.NumberColumn(format="%d")})
 
 # ---------------- 우리 투찰 ----------------
@@ -852,7 +852,7 @@ elif page == "📝 우리 투찰":
             "sajung_bid": "실제 사정율", "winner_sajung": "1순위 사정율", "my_rank": "우리 순위",
             "participants": "참가수", "first_company": "1순위 업체", "memo": "메모", "bid_key": "공고번호"})
     money = st.column_config.NumberColumn(format="localized")
-    st.dataframe(show, hide_index=True, use_container_width=True,
+    st.dataframe(show, hide_index=True, width="stretch",
                  column_config={"실제 투찰금액": money, "분석 금액": money, "1순위 금액": money,
                                 "실제-1순위": st.column_config.NumberColumn(format="localized", help="양수(+)면 1순위보다 비싸게 넣음"),
                                 "분석-1순위": st.column_config.NumberColumn(format="localized",
@@ -890,7 +890,7 @@ elif page == "📝 우리 투찰":
         fig.add_scatter(x=d2["open_date"], y=d2["sajung"], mode="markers", name="우리 사정율",
                         marker=dict(size=9, color="#cf222e"))
         fig.update_layout(yaxis_title="사정율(%)", height=380, legend=dict(orientation="h", y=1.12))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.caption("빨간 점이 회색 선과 초록 선 사이에 있었으면 낙찰입니다.")
     with st.expander("기록 삭제"):
         dk = st.selectbox("삭제할 공고", v["bid_key"] + " | " + v["name"].fillna(""))
@@ -918,7 +918,7 @@ elif page == "🏢 경쟁업체":
     name = st.text_input("업체명 검색")
     if name:
         cs = cs[cs["업체명"].fillna("").str.contains(name, regex=False)]
-    st.dataframe(cs, hide_index=True, use_container_width=True, height=400,
+    st.dataframe(cs, hide_index=True, width="stretch", height=400,
                  column_config={"평균 투찰사정율": st.column_config.NumberColumn(format="%.3f"),
                                 "사정율 편차": st.column_config.NumberColumn(format="%.3f")})
     st.caption("투찰사정율 = 업체가 써낸 금액을 하한율로 역산한 사정율(그 업체가 노린 사정율). "
@@ -935,12 +935,12 @@ elif page == "🏢 경쟁업체":
                           histnorm="percent", opacity=0.75)
         fig.update_layout(barmode="overlay", xaxis_title="투찰 사정율(%)", yaxis_title="비율(%)",
                           height=380, legend=dict(orientation="h", y=1.12))
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.dataframe(one.sort_values("open_date", ascending=False)[
             ["open_dt", "name", "org", "rank", "amount", "투찰사정율"]].rename(columns={
                 "open_dt": "개찰일시", "name": "공고명", "org": "기관", "rank": "순위",
                 "amount": "투찰금액", "투찰사정율": "투찰사정율(%)"}),
-            hide_index=True, use_container_width=True,
+            hide_index=True, width="stretch",
             column_config={"투찰금액": st.column_config.NumberColumn(format="%d"),
                            "투찰사정율(%)": st.column_config.NumberColumn(format="%.3f")})
 
@@ -1016,7 +1016,7 @@ elif page == "🔌 한전 입찰":
             tbl = pd.DataFrame(rows_k)
             if n_sj == 0:
                 tbl = tbl.drop(columns=["과거 사정율(중앙)", "예정가격 예상(중앙)"])
-            st.dataframe(tbl, hide_index=True, use_container_width=True,
+            st.dataframe(tbl, hide_index=True, width="stretch",
                          column_config={"공고문": st.column_config.LinkColumn("공고문", display_text="열기"),
                                         "공고명": st.column_config.TextColumn(width="large")})
             if n_sj:
@@ -1029,11 +1029,11 @@ elif page == "🔌 한전 입찰":
             st.subheader("📊 한전 공사 사정율 분포")
             fig = px.histogram(done_k, x="sajung", nbins=40, labels={"sajung": "사정율(%)"})
             fig.update_layout(height=320, margin=dict(t=20))
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
             by_place = (done_k.groupby("place")["sajung"].agg(["count", "median", "mean"])
                         .sort_values("count", ascending=False).head(20).reset_index()
                         .rename(columns={"place": "사업소", "count": "건수", "median": "중앙", "mean": "평균"}))
-            st.dataframe(by_place, hide_index=True, use_container_width=True,
+            st.dataframe(by_place, hide_index=True, width="stretch",
                          column_config={"중앙": st.column_config.NumberColumn(format="%.3f"),
                                         "평균": st.column_config.NumberColumn(format="%.3f")})
     if not kb_all.empty:
@@ -1098,7 +1098,7 @@ elif page == "🔌 한전 입찰":
                                                 "적격률": x["lower_rate"], "순위 목록": len(x["bidders"]),
                                                 "적격률 탈락": len(x["below"]),
                                                 "1순위 금액": f"{x['bidders'][0]['amount']:,.0f}" if x["bidders"] else ""}
-                                               for x in many]), hide_index=True, use_container_width=True)
+                                               for x in many]), hide_index=True, width="stretch")
                     if st.button(f"{len(many)}건 저장", type="primary", key="srm_result_save"):
                         msgs = []
                         for x in many:
@@ -1140,7 +1140,7 @@ elif page == "🔌 한전 입찰":
                                 raw_up = raw_up.iloc[i + 1:].reset_index(drop=True)
                                 break
                     st.caption(f"{len(raw_up):,}줄 · 앞부분 미리보기")
-                    st.dataframe(raw_up.head(5), use_container_width=True)
+                    st.dataframe(raw_up.head(5), width="stretch")
                     guess = kepco.guess_columns(list(raw_up.columns))
                     cols_opt = ["(없음)"] + list(raw_up.columns)
                     mapping = {}
@@ -1230,7 +1230,7 @@ elif page == "🔬 추천 검증":
         st.dataframe(show[["개찰", "name", "org", "sajung_pick", "amount", "sajung", "winner_sajung", "결과", "순위"]]
                      .rename(columns={"name": "공고명", "org": "발주처", "sajung_pick": "추천 사정율", "amount": "추천 금액",
                                       "sajung": "실제 사정율", "winner_sajung": "낙찰자 사정율"}),
-                     hide_index=True, use_container_width=True,
+                     hide_index=True, width="stretch",
                      column_config={"추천 금액": st.column_config.NumberColumn(format="%,.0f"),
                                     "추천 사정율": st.column_config.NumberColumn(format="%.2f"),
                                     "실제 사정율": st.column_config.NumberColumn(format="%.3f"),
@@ -1247,7 +1247,7 @@ elif page == "🔬 추천 검증":
             st.caption(f"마지막 자동 검증 {e['date']}: {e['reason']}")
             if e.get("summary"):
                 with st.expander("마지막 자동 검증 결과"):
-                    st.dataframe(pd.DataFrame(e["summary"]), hide_index=True, use_container_width=True)
+                    st.dataframe(pd.DataFrame(e["summary"]), hide_index=True, width="stretch")
         except (ValueError, KeyError):
             pass
     with st.expander("방식 직접 바꾸기"):
@@ -1276,7 +1276,7 @@ elif page == "🔬 추천 검증":
             st.warning("시험할 공고가 부족합니다. 데이터가 더 쌓인 뒤 다시 실행하세요.")
         else:
             st.subheader(f"결과 (최근 {d_}일, 시험 공고 {int(summ['시험 공고'].max())}건)")
-            st.dataframe(summ, hide_index=True, use_container_width=True)
+            st.dataframe(summ, hide_index=True, width="stretch")
             st.markdown(
                 "- **1순위**: 그 방식대로 넣었으면 실제로 1순위였던 공고 수\n"
                 "- **무작위 기대 1순위**: 아무렇게나 넣었을 때 기대되는 1순위 수 (참가업체 수로 계산)\n"
@@ -1287,7 +1287,7 @@ elif page == "🔬 추천 검증":
                        "10위 이내율과 중앙 순위를 함께 보세요. 데이터가 쌓일수록 결과가 믿을 만해집니다.")
             with st.expander("공고별 상세"):
                 st.dataframe(det.drop(columns=["순위 있음"]).sort_values(["개찰일", "방식"], ascending=[False, True]),
-                             hide_index=True, use_container_width=True,
+                             hide_index=True, width="stretch",
                              column_config={"실제 사정율": st.column_config.NumberColumn(format="%.3f"),
                                             "1순위 사정율": st.column_config.NumberColumn(format="%.3f"),
                                             "무작위 기대": st.column_config.NumberColumn(format="%.4f")})
@@ -1375,7 +1375,7 @@ elif page == "⬇️ 데이터 수집":
             st.caption("지운 자리는 새 자료가 다시 쓰므로 더 늘지는 않습니다. 숫자(MB)가 실제로 줄어드는 압축은 "
                        "사이트가 멈추지 않도록 매일 새벽 자동 수집 때 합니다.")
         with st.expander("테이블별 용량"):
-            st.dataframe(db.table_sizes(), hide_index=True, use_container_width=True)
+            st.dataframe(db.table_sizes(), hide_index=True, width="stretch")
             st.caption("자동 수집이 매일 정리합니다: 우리 업종이 아닌 공고(딸린 자료 포함), 14일 지난 예비가격 15개 상세. "
                        "(예정가격·사정율은 남아서 분석에 지장 없음)")
     st.subheader("🩺 데이터 점검 (최근 30일 개찰 공고)")
@@ -1383,11 +1383,11 @@ elif page == "⬇️ 데이터 수집":
     if hd.empty:
         st.caption("최근 30일 개찰 공고가 아직 없습니다.")
     else:
-        st.dataframe(hd, hide_index=True, use_container_width=True)
+        st.dataframe(hd, hide_index=True, width="stretch")
         st.caption("각 정보가 연결된 공고 비율입니다. 기초금액·예정가격·개찰결과가 80% 이상이면 정상이며, "
                    "낮으면 이 표를 캡처해서 보내주세요. (최종 낙찰자는 적격심사 후 며칠 뒤에 채워집니다)")
     st.subheader("과거 데이터 채우기 현황")
-    st.dataframe(pd.DataFrame(collector.backfill_status()), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(collector.backfill_status()), hide_index=True, width="stretch")
     st.caption("자동 수집이 매일 최근 3일 + 과거 데이터를 조금씩 채웁니다. 목표 날수에 도달하면 1년치 분석이 가능합니다.")
     st.markdown("---")
     st.subheader("직접 수집")
@@ -1433,7 +1433,7 @@ elif page == "⬇️ 데이터 수집":
     st.subheader("수집 기록")
     st.dataframe(db.query_df('SELECT run_at AS "시각", kind AS "항목", period AS "기간", count AS "건수", '
                              'message AS "메시지" FROM collect_log ORDER BY run_at DESC LIMIT 50'),
-                 hide_index=True, use_container_width=True)
+                 hide_index=True, width="stretch")
 
 # ---------------- 설정 ----------------
 elif page == "⚙️ 설정 · API 점검":
