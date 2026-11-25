@@ -853,7 +853,55 @@ def expected_participants(tier_list) -> float | None:
 FOCUS_MAX_PARTICIPANTS = 150   # 예상 참가업체가 이 이하면 '★ 집중' (울산 지역제한 보통 350곳, 전국 1,000곳 안팎)
 
 
+def _comp_group(d) -> pd.Series | str:
+    """참가업체 수를 좌우하는 공고 유형: 지역범위 × 계약방식 × 금액대."""
+    region = db.company()["region"] or "울산"
+
+    def one(allowed, cm, amt):
+        allowed, cm = str(allowed or ""), str(cm or "")
+        scope = f"{region}제한" if region in allowed else ("타지역제한" if allowed else "전국")
+        meth = "수의" if "수의" in cm else ("최저가" if "최저가" in cm else "경쟁")
+        try:
+            a_ = float(amt)
+        except (TypeError, ValueError):
+            a_ = float("nan")
+        band = ("?" if a_ != a_ else "~5천" if a_ < 5e7 else "~1억" if a_ < 1e8 else "~3억" if a_ < 3e8
+                else "~10억" if a_ < 1e9 else "10억~")
+        return f"{scope}|{meth}|{band}"
+    if isinstance(d, pd.DataFrame):
+        amt = d["base_amt"].fillna(d["est_price"] * 1.1) if "est_price" in d else d["base_amt"]
+        cm = d["contract_method"].fillna("").astype(str) + " " + d["method"].fillna("").astype(str)
+        return pd.Series([one(x, y, z) for x, y, z in zip(d["allowed_regions"].fillna(""), cm, amt)], index=d.index)
+    amt = d.get("base_amt")
+    if (amt is None or pd.isna(amt)) and pd.notna(d.get("est_price")):
+        amt = d["est_price"] * 1.1
+    return one(d.get("allowed_regions"), f"{d.get('contract_method') or ''} {d.get('method') or ''}", amt)
+
+
+_COMP_CACHE: dict = {}
+
+
 def expected_competition(df: pd.DataFrame, row, keywords=None) -> float | None:
+    """과거 같은 유형(지역범위·계약방식·금액대) 공고의 참가업체 수 중앙값 (2026-11-25: 기관·업종 기준 예측은
+    공정 시험에서 거의 안 맞아서(상관 0.24) 교체)."""
+    try:
+        key = _comp_group(row)
+        ck = (id(df), len(df))
+        med = _COMP_CACHE.get(ck)
+        if med is None:
+            h = df[(df["participants"] > 0) & df["open_date"].notna()]
+            med = h.groupby(_comp_group(h))["participants"].agg(["median", "size"])
+            if len(_COMP_CACHE) > 4:
+                _COMP_CACHE.clear()
+            _COMP_CACHE[ck] = med
+        if key in med.index and med.at[key, "size"] >= 5:
+            return float(med.at[key, "median"])
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def expected_competition_old(df: pd.DataFrame, row, keywords=None) -> float | None:
     """기초금액 공개 전에도: 과거 비슷한 공고(같은 기관 → 울산 지역제한 → 전국 같은 업종·금액대)의 참가업체 수 중앙값."""
     try:
         if pd.isna(row.get("base_amt")) and pd.notna(row.get("est_price")):
@@ -1338,7 +1386,7 @@ def backtest(df: pd.DataFrame, keywords, test_days: int = 90, max_tests: int = 3
         pre["_loc"] = pre["bid_key"].isin(local_region_history(pre, region)["bid_key"])
         pre.attrs["_loc_key"] = region
     keep = [c for c in ("bid_key", "name", "org", "open_date", "sajung", "winner_sajung", "participants",
-                        "base_amt", "first_won", "_ind", "_loc", "range_begin", "range_end") if c in pre]
+                        "base_amt", "first_won", "_ind", "_loc", "range_begin", "range_end", "allowed_regions", "contract_method", "method", "est_price") if c in pre]
     attrs = dict(pre.attrs)
     pre = pre[keep].sort_values("open_date")
     pre.attrs.update(attrs)
@@ -1354,7 +1402,8 @@ def backtest(df: pd.DataFrame, keywords, test_days: int = 90, max_tests: int = 3
         kw_use = kw_r if tuple(kw_r) != kw_all or not kw_all else list(kw_all)
         picks = strategy_picks(hist, r, kw_use)
         try:
-            exp_p = expected_participants(tiers(hist, r, kw_use))   # 그 공고 이전 자료로 예측한 참가업체 수
+            _COMP_CACHE.clear()
+            exp_p = expected_competition(hist, r)   # 그 공고 이전 자료로 예측한 참가업체 수
         except Exception:  # noqa: BLE001
             exp_p = None
         p = r["participants"]
