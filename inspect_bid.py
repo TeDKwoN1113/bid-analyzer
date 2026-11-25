@@ -159,7 +159,67 @@ def eligibility_summary() -> None:
     print(f"\n참가 가능 중 최저가 내역서 입찰 {int(lp.sum())}건, ⭐ 후보 계산은 사이트에서")
 
 
+def deep(no: str) -> None:
+    """공고 하나 집중 분석 (공개 공고 정보만 — 회사 투찰 내용은 출력하지 않음)."""
+    import analysis
+    df = analysis.load_dataset()
+    rows = df[df["bid_no"] == no]
+    if rows.empty:
+        print(f"{no}: 분석 표에 없음")
+        return
+    r = rows.iloc[0]
+    print(f"\n######## 집중 분석: {r['name']} ({no}) ########")
+    for k in ("org", "demand_org", "region", "contract_method", "method", "open_dt", "close_dt", "est_price", "base_amt",
+              "lower_rate", "a_value", "pure_cost", "range_begin", "range_end", "joint_duty", "joint_rate", "detail_bid",
+              "ability_list", "allowed_regions", "licenses", "participants"):
+        if k in r.index:
+            print(f"  {k}: {r[k]}")
+    print("  참가지역 표시:", analysis.region_label(r), "| 참가 가능:", bool(analysis.eligible(rows.head(1)).iloc[0]),
+          "| 제한사유:", analysis.limit_reasons(rows.head(1)).iloc[0] or "-")
+    print("  적격심사 자가진단:", analysis.qual_check(r))
+    print("  같은 유형(지역범위·계약방식·금액대) 보통 참가:", analysis.expected_competition(df, r), "| 유형:", analysis._comp_group(r))
+    kw = analysis.bid_keywords(r)
+    # 비교 공고 단계별 사정율 분포
+    for name, h in analysis.tiers(df, r, kw):
+        s_ = h["sajung"].dropna()
+        w_ = (h["winner_sajung"] - h["sajung"]).dropna()
+        if len(s_):
+            print(f"  [{name}] {len(s_)}건 · 실제 사정율 10/25/50/75/90% = "
+                  + " / ".join(f"{s_.quantile(q):.3f}" for q in (.1, .25, .5, .75, .9))
+                  + f" · 낙찰구간 폭 중앙 {w_[w_ >= 0].median():.4f}%p · 참가 중앙 {h['participants'].median():.0f}")
+    if pd.notna(r.get("base_amt")) and pd.notna(r.get("lower_rate")):
+        for mode in ("blend", "smooth30", "mean_sajung"):
+            pk = analysis.pick_bid(df, r, kw, mode=mode)
+            if pk:
+                print(f"\n  ▶ 방식 {analysis.STRATEGIES[mode]}: 사정율 {pk['사정율']:.3f}% · 투찰금액 {pk['투찰금액']:,}원 · "
+                      f"낙찰확률 {pk.get('낙찰확률')}% · 무작위 대비 {pk.get('무작위 대비')} · 신뢰도 {pk['신뢰도']}")
+                for c in pk.get("후보", [])[:3]:
+                    print("     후보:", c)
+                if mode == "blend":
+                    for x in analysis.evidence_lines(pk)[:8]:
+                        print("     ·", x)
+        try:
+            rk = analysis.load_ranks()
+            lab, comp = analysis.likely_competitors(rk, r, df)
+            if len(comp):
+                comp = comp.copy()
+                for c in comp.columns:
+                    if "업체" in c:
+                        comp[c] = comp[c].map(lambda s: str(s)[:1] + "○○○")
+                print(f"\n  예상 경쟁사 ({lab}) — 이름 가림")
+                print(comp.head(8).to_string(index=False))
+        except Exception as e:  # noqa: BLE001
+            print("  경쟁사 분석 실패:", e)
+    else:
+        print("  기초금액(또는 하한율) 미공개 → 추천 금액은 공개 후 계산")
+
+
 if __name__ == "__main__":
+    if sys.argv[1:] and sys.argv[1].strip().upper().startswith("DEEP:"):
+        load_settings()
+        for x in sys.argv[1].split(":", 1)[1].replace(",", " ").split():
+            deep(x.strip())
+        sys.exit(0)
     if sys.argv[1:] and sys.argv[1].strip().upper() == "ELIG":
         load_settings()
         eligibility_summary()
