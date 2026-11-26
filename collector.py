@@ -407,6 +407,12 @@ def auto(progress=print) -> dict:
     if progress:
         progress(f"[누적 내려받음 {db.read_mb():,.0f}MB] 개찰순위 후")
     summary["우리 투찰"] = update_my_bids(progress)
+    # 대표는 참가 가능 공고에 모두 투찰함 → 지난 1년 공고도 개찰순위에서 우리 투찰을 조금씩 찾아 채움 (실행마다 150건)
+    try:
+        summary["우리 투찰(지난 1년 찾기)"] = update_my_bids(progress, scan_limit=150, days=365)
+    except Exception as e:  # noqa: BLE001
+        if progress:
+            progress(f"지난 투찰 찾기 실패: {e}")
     if progress:
         progress(f"[누적 내려받음 {db.read_mb():,.0f}MB] 우리 투찰 확인 후")
     if progress:
@@ -625,7 +631,7 @@ def find_our_bid(bid_no: str, bid_ord: str, bizno: str) -> dict | None:
     return ours
 
 
-def update_my_bids(progress=None, scan_limit: int = 200) -> str:
+def update_my_bids(progress=None, scan_limit: int = 200, days: int = 4) -> str:
     """우리 회사 투찰 결과 채우기 (실제 투찰금액·순위는 개찰순위에서 사업자번호로 찾음).
 
     1) 기록한 공고가 개찰되면 개찰순위 전체에서 우리 줄을 찾아 '실제 금액'과 순위를 채움
@@ -665,7 +671,7 @@ def update_my_bids(progress=None, scan_limit: int = 200) -> str:
             import analysis
             df = analysis.load_dataset()
             now = pd.Timestamp.now()
-            t = analysis.apply_filters(df[(df["open_date"] < now) & (df["open_date"] >= now - pd.Timedelta(days=4))
+            t = analysis.apply_filters(df[(df["open_date"] < now) & (df["open_date"] >= now - pd.Timedelta(days=days))
                                           & (df["participants"] > 0)],
                                        keywords=analysis.company_keywords(), eligible_only=True)
             t = t[~t["bid_key"].astype(str).str.startswith("D2B")]
