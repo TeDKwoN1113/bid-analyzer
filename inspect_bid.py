@@ -271,7 +271,7 @@ def score(no: str, picks: list[float]) -> None:
         params["inqryDiv"] = div
     rows = [collector.map_rank(no, r) for r in api_client.call_all("ranks", params)]
     ranked = sorted([r for r in rows if r["rank"] > 0 and r["amount"]], key=lambda r: r["rank"])
-    print(f"######## 채점 {no} ########")
+    print("######## 채점 ########")   # 공개 로그: 공고번호·금액·순위는 남기지 않음
     print(f"  개찰순위 줄 {len(rows)} · 순위 있는 업체 {len(ranked)} · 기초금액 확인 {'예' if base else '아니오'}")
     if not ranked or not base:
         print("  아직 결과가 없거나 기초금액을 못 찾음")
@@ -290,13 +290,14 @@ def score(no: str, picks: list[float]) -> None:
             res = f"하한 미달 (실제보다 {actual - sj:.3f}%p 낮음)"
         else:
             vr = 1 + sum(1 for x in amts if x < amt)
-            res = ("🏆 1순위" if vr == 1 else f"가상 {vr}위") + f" (실제보다 {sj - actual:+.3f}%p)"
+            # 공개 로그라 순위 숫자는 남기지 않음 (비율·%p만)
+            res = ("🏆 1순위" if vr == 1 else "1순위보다 높음") + f" (실제보다 {sj - actual:+.3f}%p)"
         print(f"  추천 {sj:.2f}% → {res}")
     biz = (db.company().get("bizno") or "").replace("-", "")
     ours = next((r for r in rows if (r["bizno"] or "").replace("-", "") == biz and biz), None)
     if ours:
         os_ = ((ours["amount"] - a_val) / (lr / 100) + a_val) / base * 100
-        print(f"  우리 실제 투찰: {ours['rank'] or '순위 없음(하한 미달 등)'}위 · 환산 사정율 {os_:.3f}% (실제보다 {os_ - actual:+.3f}%p)")
+        print(f"  우리 실제 투찰: 실제 사정율보다 {os_ - actual:+.3f}%p")
     else:
         print("  우리 회사 투찰 줄 없음")
 
