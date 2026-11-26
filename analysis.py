@@ -68,9 +68,12 @@ def _raw_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         regs = db.query_df_big("SELECT bid_key, region FROM regions")
         lics = db.query_df_big("SELECT bid_key, license FROM licenses")
         cache = {"full_at": now, "at": now, "base": base, "regions": regs, "licenses": lics, "sql": _BASE_SQL}
+        if os.environ.get("GITHUB_ACTIONS"):
+            print(f"[분석 표 전체 받기] 공고 {len(base):,}행 · 누적 {db.read_mb():,.0f}MB")
     else:
         cut = (cache["at"] - pd.Timedelta(days=CACHE_MARGIN_DAYS)).strftime("%Y-%m-%d")
         p = {"cut": cut}
+        _mb0 = db.read_mb()
         base_new = db.query_df(_BASE_SQL + _RECENT_WHERE, p)
         sub = f"SELECT b.bid_key FROM bids b {_RECENT_WHERE}"
         regs_new = db.query_df(f"SELECT bid_key, region FROM regions WHERE bid_key IN ({sub})", p)
@@ -81,6 +84,9 @@ def _raw_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             old = cache[name]
             cache[name] = pd.concat([old[~old["bid_key"].isin(keys)], new], ignore_index=True)
         cache["at"] = now
+        if os.environ.get("GITHUB_ACTIONS"):
+            print(f"[분석 표 최근분 받기] 공고 {len(base_new):,}행 · 지역 {len(regs_new):,} · 면허 {len(lics_new):,} · "
+                  f"{db.read_mb() - _mb0:,.1f}MB")
     if db.is_remote():
         try:
             tmp = path + ".tmp"

@@ -555,7 +555,11 @@ def quick(progress=print) -> dict:
     except Exception as e:  # noqa: BLE001
         if progress:
             progress(f"국방 수집 실패: {e}")
+    if progress:
+        progress(f"[누적 내려받음 {db.read_mb():,.0f}MB] 빠른 수집·재확인·국방 후")
     summary["우리 투찰"] = update_my_bids(progress)
+    if progress:
+        progress(f"[누적 내려받음 {db.read_mb():,.0f}MB] 우리 투찰 확인 후")
     db.log("빠른 수집", f"{days[0]}~{today}", sum(v["count"] for v in summary.values() if isinstance(v, dict)),
            "; ".join(v["stopped"] for v in summary.values() if isinstance(v, dict) and v["stopped"]))
     return summary
@@ -844,8 +848,10 @@ def print_status() -> None:
     """실행 기록(로그)에 남기는 점검 요약 — 건수·비율만, 회사 정보는 넣지 않음."""
     try:
         import analysis
+        _m0 = db.read_mb()
         df = analysis.load_dataset()
         print("=== 점검 요약 ===")
+        print(f"[누적 내려받음 {db.read_mb():,.0f}MB] 점검용 분석 표 (+{db.read_mb() - _m0:,.1f}MB)")
         print(f"DB 용량: {db.size_mb() or 0:,.0f}MB")
         for r in backfill_status():
             print(f"채우기 {r['항목']}: {r['수집된 날수']}/{r['목표 날수']}일")
