@@ -71,7 +71,8 @@ def _raw_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             cache = None
     # 자동 수집(GitHub Actions) 안에서는 방금(10분 안) 받은 표를 그대로 씀: 한 실행 안에서 여러 단계·알림이
     # 같은 표를 매번 다시 받으면 무료 전송량(월 5GB)을 금방 넘김. 사이트는 항상 최신으로 받음.
-    if cache is not None and os.environ.get("GITHUB_ACTIONS") and (now - cache["at"]).total_seconds() < 600:
+    # (한 실행이 10분을 넘기면 같은 표를 두 번 받던 문제 → 40분으로)
+    if cache is not None and os.environ.get("GITHUB_ACTIONS") and (now - cache["at"]).total_seconds() < 2400:
         return cache["base"], cache["regions"], cache["licenses"]
     if cache is None:
         base = db.query_df_big(_BASE_SQL, {"keep_from": _keep_from()})
