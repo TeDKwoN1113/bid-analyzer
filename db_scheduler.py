@@ -23,11 +23,11 @@ SECRET_NAME = "gh_dispatch_token"
 PREFIX = "bid_collect_"
 # (이름, cron — UTC 기준). 한국시간 = UTC + 9
 JOBS = [
-    ("dawn", "41 19,20,21 * * *"),      # 매일 04:41 05:41 06:41 — 전체 수집
-    ("morning", "17 22,23 * * *"),      # 매일 07:17 08:17 — 예비
-    ("day", "23 0-9/2 * * 1-5"),        # 평일 09:23 ~ 17:23 2시간마다 — 빠른 수집
-    ("hourly", "52 0-8 * * 1-5"),       # 평일 매시 52분 — 예비 (최근에 돌았으면 바로 끝남)
+    ("dawn", "41 19,20,21 * * *"),      # 매일 04:41 05:41 06:41 — 전체 수집 (이미 했으면 바로 끝남)
+    ("day", "23 2,6 * * 1-5"),          # 평일 11:23 15:23 — 빠른 수집
 ]
+# 2026-11-26: Supabase 무료 전송량(5GB) 초과 → 낮 수집을 2번으로 줄이고 사이트 깨우기는 잠시 끔
+WAKE_ENABLED = False
 # 사이트 깨우기(한전 공고는 사이트 서버에서만 받음) — 한국시간 06:37 09:37 12:37 15:37 18:37 21:37
 WAKE = ("wake_site", "37 21,0,3,6,9,12 * * *", "wake-site.yml")
 
@@ -75,9 +75,10 @@ def main() -> None:
             c.execute(text("SELECT cron.unschedule(:n)"), {"n": name})
         for name, cron in JOBS:
             c.execute(text("SELECT cron.schedule(:n, :c, :cmd)"), {"n": PREFIX + name, "c": cron, "cmd": call})
-        wake_call = call.replace(WORKFLOW, WAKE[2]).replace(',\"inputs\":{\"mode\":\"scheduled\"}', "")
-        c.execute(text("SELECT cron.schedule(:n, :c, :cmd)"), {"n": PREFIX + WAKE[0], "c": WAKE[1], "cmd": wake_call})
-    print(f"DB 시계에 수집 예약 {len(JOBS)}개 + 사이트 깨우기 1개 등록 (GitHub 예약이 빠져도 정시에 시작)")
+        if WAKE_ENABLED:
+            wake_call = call.replace(WORKFLOW, WAKE[2]).replace(',\"inputs\":{\"mode\":\"scheduled\"}', "")
+            c.execute(text("SELECT cron.schedule(:n, :c, :cmd)"), {"n": PREFIX + WAKE[0], "c": WAKE[1], "cmd": wake_call})
+    print(f"DB 시계에 수집 예약 {len(JOBS)}개" + (" + 사이트 깨우기 1개" if WAKE_ENABLED else " (사이트 깨우기 꺼짐)") + " 등록 (GitHub 예약이 빠져도 정시에 시작)")
     # 지금 한 번 보내서 실제로 되는지 확인
     with eng.begin() as c:
         rid = c.execute(text(call)).scalar()
