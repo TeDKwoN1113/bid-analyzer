@@ -252,6 +252,55 @@ def deep(no: str) -> None:
         print("  기초금액(또는 하한율) 미공개 → 추천 금액은 공개 후 계산")
 
 
+def score(no: str, picks: list[float]) -> None:
+    """개찰 결과 채점 — DB 를 거의 쓰지 않고 API 로 바로 확인 (무료 전송량 절약).
+    추천 사정율들이 낙찰구간 안/위/하한 미달인지, 가상 순위가 몇 위인지."""
+    import math
+    import collector
+    s = load_settings()
+    bp = {"bidNtceNo": no}
+    if s["inqry_div_bidno"].get("base_amount"):
+        bp["inqryDiv"] = s["inqry_div_bidno"]["base_amount"]
+    ba = api_client.call("base_amount", bp, rows=10)[0]
+    b = next((row for tbl, row in collector.map_base(ba[0]) if tbl == "base_amounts"), None) if ba else None
+    base = b and b.get("base_amt")
+    a_val = (b or {}).get("a_value") or 0
+    params = {"bidNtceNo": no, "bidNtceOrd": "000"}
+    div = s["inqry_div_bidno"].get("ranks")
+    if div:
+        params["inqryDiv"] = div
+    rows = [collector.map_rank(no, r) for r in api_client.call_all("ranks", params)]
+    ranked = sorted([r for r in rows if r["rank"] > 0 and r["amount"]], key=lambda r: r["rank"])
+    print(f"######## 채점 {no} ########")
+    print(f"  개찰순위 줄 {len(rows)} · 순위 있는 업체 {len(ranked)} · 기초금액 확인 {'예' if base else '아니오'}")
+    if not ranked or not base:
+        print("  아직 결과가 없거나 기초금액을 못 찾음")
+        return
+    top = ranked[0]
+    plan = top["amount"] / top["rate"] * 100 if top["rate"] else None
+    lr = 88.745
+    actual = plan / base * 100
+    floor = (plan - a_val) * lr / 100 + a_val
+    win_s = ((top["amount"] - a_val) / (lr / 100) + a_val) / base * 100
+    print(f"  참가 {len(rows)}곳 · 실제 사정율 {actual:.4f}% · 1순위가 노린 사정율(환산) {win_s:.4f}% · 낙찰구간 폭 {win_s - actual:.4f}%p")
+    amts = sorted(r["amount"] for r in ranked)
+    for sj in picks:
+        amt = math.ceil((base * sj / 100 - a_val) * lr / 100 + a_val)
+        if amt < floor:
+            res = f"하한 미달 (실제보다 {actual - sj:.3f}%p 낮음)"
+        else:
+            vr = 1 + sum(1 for x in amts if x < amt)
+            res = ("🏆 1순위" if vr == 1 else f"가상 {vr}위") + f" (실제보다 {sj - actual:+.3f}%p)"
+        print(f"  추천 {sj:.2f}% → {res}")
+    biz = (db.company().get("bizno") or "").replace("-", "")
+    ours = next((r for r in rows if (r["bizno"] or "").replace("-", "") == biz and biz), None)
+    if ours:
+        os_ = ((ours["amount"] - a_val) / (lr / 100) + a_val) / base * 100
+        print(f"  우리 실제 투찰: {ours['rank'] or '순위 없음(하한 미달 등)'}위 · 환산 사정율 {os_:.3f}% (실제보다 {os_ - actual:+.3f}%p)")
+    else:
+        print("  우리 회사 투찰 줄 없음")
+
+
 if __name__ == "__main__":
     if sys.argv[1:] and sys.argv[1].strip().upper().startswith("DEEP:"):
         load_settings()
@@ -261,6 +310,11 @@ if __name__ == "__main__":
     if sys.argv[1:] and sys.argv[1].strip().upper() == "ELIG":
         load_settings()
         eligibility_summary()
+        sys.exit(0)
+    if sys.argv[1:] and sys.argv[1].strip().upper().startswith("SCORE:"):
+        load_settings()
+        parts = sys.argv[1].split(":")[1:]
+        score(parts[0].strip(), [float(x) for x in parts[1:]] or [100.0])
         sys.exit(0)
     if sys.argv[1:] and sys.argv[1].strip().upper() == "KEPCO":
         load_settings()
