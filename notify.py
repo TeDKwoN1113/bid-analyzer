@@ -372,6 +372,10 @@ def weekly_report(df: pd.DataFrame | None = None, days: int = 7) -> str:
         return "\n".join(lines)
     wk = mb[(mb["open_date"] >= since) & (mb["open_date"] < now)]
     mine_nos = set(mb["bid_no"])
+    try:  # 사이트 '진행 관리'에서 투찰 완료로 체크한 공고도 넣은 것으로 셈
+        mine_nos |= set(db.query_df("SELECT bid_no FROM bid_track WHERE bid_done = 1")["bid_no"].astype(str))
+    except Exception:  # noqa: BLE001
+        pass
     missed = opened[~opened["bid_no"].isin(mine_nos)]
     lines.append(f"참가 가능 공고 {len(opened)}건 개찰 · 우리 투찰 {len(wk)}건 · 안 넣은 공고 {len(missed)}건")
 
@@ -394,6 +398,9 @@ def weekly_report(df: pd.DataFrame | None = None, days: int = 7) -> str:
     if len(missed) and len(opened):
         lines.append(f"💡 참가 가능 공고의 {len(missed) / len(opened) * 100:.0f}%를 넣지 않았어요. "
                      "낙찰 횟수는 넣은 공고 수에 비례합니다.")
+        # 공정 시험 기준 건당 1순위 약 2.8% (지금 방식, 9개월) → 다 넣었다면 기대 1순위 수
+        lines.append(f"📊 이번 주 {len(opened)}건을 모두 넣었다면 기대 1순위 약 {len(opened) * 0.028:.1f}건 "
+                     f"(넣은 {len(opened) - len(missed)}건 기준 약 {(len(opened) - len(missed)) * 0.028:.1f}건)")
     return "\n".join(lines)
 
 
