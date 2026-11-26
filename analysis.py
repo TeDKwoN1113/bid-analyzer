@@ -36,7 +36,7 @@ _BASE_SQL = """
 _OLD_SQL = '\n        SELECT b.bid_key, b.bid_no, b.bid_ord, b.name, b.org, b.demand_org, b.region,\n               b.main_type, b.method, b.contract_method, b.notice_dt, b.close_dt, b.open_dt, b.est_price,\n               b.lower_rate, b.url, b.spec_docs, b.ntce_kind, b.qual_dt, b.begin_dt,\n               b.perf_limit, b.pq, b.designated, b.ability_list, b.joint_duty, b.detail_bid, b.joint_rate,\n               ba.base_amt AS base_amt_notice, ba.a_value, ba.range_begin, ba.range_end,\n               ba.a_apply, ba.pure_cost, ba.a_detail,\n               p.plan_price, p.base_amt AS base_amt_open,\n               o.participants AS participants_open, o.status, o.first_company, o.first_amt, o.first_bizno,\n               o.first_rate,\n               r.participants AS participants_final, r.winner, r.win_amt, r.win_rate, r.winner_bizno\n        FROM bids b\n        LEFT JOIN base_amounts ba ON ba.bid_key = b.bid_key\n        LEFT JOIN plans p ON p.bid_key = b.bid_key\n        LEFT JOIN openings o ON o.bid_key = b.bid_key\n        LEFT JOIN results r ON r.bid_key = b.bid_key\n'
 _RECENT_WHERE = "WHERE b.open_dt IS NULL OR b.open_dt >= :cut OR b.notice_dt >= :cut OR b.bid_key LIKE 'D2B%'"
 CACHE_FULL_DAYS = 30     # 이 주기로 전체를 새로 받음 (삭제·정정 반영) — 무료 전송량 때문에 7일 → 30일
-CACHE_MARGIN_DAYS = 14   # 마지막으로 받은 날보다 이만큼 앞부터 다시 받음
+CACHE_MARGIN_DAYS = 5    # 마지막으로 받은 날보다 이만큼 앞부터 다시 받음 (전송량 때문에 14→5일, 늦게 채워진 결과는 30일마다 전체 받기로 반영)
 _mem: dict = {}
 
 
@@ -1213,7 +1213,10 @@ def pick_scorecard(df: pd.DataFrame) -> pd.DataFrame:
     s_, a, b = v["sajung_pick"], v["sajung"], v["winner_sajung"]
     v["결과"] = np.where(s_ < a, "하한 미달",
                        np.where(b.notna() & (s_ < b), "🏆 낙찰", np.where(b.notna(), "낙찰자보다 높음", "결과 대기")))
-    rk = db.query_df("SELECT bid_key, amount FROM ranks WHERE rank > 0 AND amount IS NOT NULL")
+    # 채점할 공고의 개찰순위만 받음 (전체 9만 줄을 매번 받으면 전송량 낭비)
+    keys = sorted({k for k in v["bid_key"].astype(str) if re.fullmatch(r"[A-Za-z0-9_\-]+", k)})
+    rk = db.query_df("SELECT bid_key, amount FROM ranks WHERE rank > 0 AND amount IS NOT NULL AND bid_key IN ("
+                     + ",".join(f"'{k}'" for k in keys) + ")") if keys else pd.DataFrame(columns=["bid_key", "amount"])
     amounts = {k: np.sort(g["amount"].values) for k, g in rk.groupby("bid_key")} if len(rk) else {}
 
     def vrank(r):
