@@ -35,6 +35,7 @@ def decide(summary, current_label: str) -> tuple[str, str]:
         return current_label, f"시험 공고 {n}건으로 아직 부족(최소 {MIN_TESTS}건) → 현재 방식 유지"
     use_rank = "순위 비교 공고" in summary and summary["순위 비교 공고"].max() >= MIN_RANKED
     metric, count = ("10위 이내율(%)", "10위 이내") if use_rank else ("무작위 대비(배)", "1순위")
+    summary = summary[summary["방식"] != analysis.ORACLE_LABEL]   # 개찰 후 정보를 쓴 참고 방식은 고르지 않음
     s = summary.set_index("방식")
     if current_label not in s.index:
         return current_label, "현재 방식 결과 없음 → 유지"

@@ -362,7 +362,7 @@ def test_modoobid_history_import():
 
 def test_backtest_and_tune_rules(df):
     s, d = analysis.backtest(df, ["전기"], test_days=120, max_tests=20)
-    assert not s.empty and set(s["방식"]) <= set(analysis.STRATEGIES.values())
+    assert not s.empty and set(s["방식"]) <= set(analysis.STRATEGIES.values()) | {analysis.ORACLE_LABEL}
     cur, alt = analysis.STRATEGIES["blend"], analysis.STRATEGIES["region_only"]
     mk = lambda a, b: pd.DataFrame([  # noqa: E731
         {"방식": cur, "시험 공고": 200, "순위 비교 공고": 80, "10위 이내": a, "10위 이내율(%)": a / 0.8, "1순위": 1, "무작위 대비(배)": 1},

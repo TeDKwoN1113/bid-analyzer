@@ -1046,7 +1046,28 @@ STRATEGIES = {
     "smooth15": "⑧ 넓게 평활 0.15%p",
     "smooth30": "⑨ 넓게 평활 0.30%p",
     "blend_type": "⑩ 참가 수 유형 맞춤",
+    "density": "⑪ 경쟁 밀도 맞춤 (낙찰구간을 예상 참가 수로 환산)",
 }
+# 공정 시험 전용(실제 참가 수 = 개찰 후에야 아는 정보) — 참가 수를 완벽히 맞혔을 때의 한계 확인용, 실전 사용 불가
+ORACLE_LABEL = "⑫ (참고) 실제 참가 수를 알았다면"
+
+
+def density_scaled(tl, n_target: float | None):
+    """경쟁 밀도 맞춤: 낙찰구간 폭은 참가 수에 반비례 → 과거 공고마다 구간을 '이번 공고 참가 수'로 환산.
+    (참가 1,000곳 공고의 0.002%p 구간 = 참가 300곳이면 약 0.007%p). 실제 사정율 분포는 그대로."""
+    if not n_target or n_target <= 0:
+        return tl
+    out = []
+    for name, h in tl:
+        if "participants" not in h or h.empty:
+            out.append((name, h))
+            continue
+        n = pd.to_numeric(h["participants"], errors="coerce")
+        f = (n / n_target).clip(0.2, 5.0)
+        gap = (h["winner_sajung"] - h["sajung"]) * f
+        h2 = h.assign(winner_sajung=(h["sajung"] + gap).where(n.notna() & (n > 0), h["winner_sajung"]))
+        out.append((name, h2))
+    return out
 
 
 def type_matched(tl, df, row, lo: float = 0.4, hi: float = 2.5):
@@ -1102,6 +1123,8 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True,
         tl = reg_tiers
     elif mode == "blend_type":
         tl = type_matched(tl, df, row)
+    elif mode == "density":
+        tl = density_scaled(tl, expected_competition(df, row))
     elif mode == "blend_range":
         tl = [(n, same_range(h, row, 5 if n.startswith("같은 기관") else 20)) for n, h in tl]
     curve, weights = blend(tl)
@@ -1437,6 +1460,10 @@ def strategy_picks(hist: pd.DataFrame, row, keywords) -> dict:
         out[label] = _pick_from_curve(win_curve(tl[0][1], width=wd))
     _COMP_CACHE.clear()
     out["⑩ 참가 수 유형 맞춤"] = _pick_from_curve(blend(type_matched(tl, hist, row))[0])
+    out["⑪ 경쟁 밀도 맞춤 (낙찰구간을 예상 참가 수로 환산)"] = _pick_from_curve(
+        blend(density_scaled(tl, expected_competition(hist, row)))[0])
+    if pd.notna(row.get("participants")) and row.get("participants"):
+        out[ORACLE_LABEL] = _pick_from_curve(blend(density_scaled(tl, float(row["participants"])))[0])
     out["⑦ 현재 방식 + 예가범위 맞춤"] = _pick_from_curve(blend(
         [(n, same_range(h, row, 5 if n.startswith("같은 기관") else 20)) for n, h in tl])[0])
     out["⑤ 단순 평균 (사정율 평균)"] = round(float(tl[0][1]["sajung"].mean()), 2)
