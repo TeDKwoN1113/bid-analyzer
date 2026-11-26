@@ -377,7 +377,10 @@ def weekly_report(df: pd.DataFrame | None = None, days: int = 7) -> str:
     except Exception:  # noqa: BLE001
         pass
     missed = opened[~opened["bid_no"].isin(mine_nos)]
-    lines.append(f"참가 가능 공고 {len(opened)}건 개찰 · 우리 투찰 {len(wk)}건 · 안 넣은 공고 {len(missed)}건")
+    lines.append(f"참가 가능 공고 {len(opened)}건 개찰 · 결과 확인된 우리 투찰 {len(wk)}건")
+    if len(missed):
+        # 대표는 참가 가능한 공고에 모두 투찰함 → 차이는 '우리 투찰을 아직 못 찾은 것'(자동 찾기 누락) 점검용
+        lines.append(f"🔎 우리 투찰을 아직 못 찾은 공고 {len(missed)}건 (자동 찾기 점검 대상)")
 
     def counts(x):
         r = x["결과"]
@@ -395,12 +398,6 @@ def weekly_report(df: pd.DataFrame | None = None, days: int = 7) -> str:
     if len(done):
         c = counts(done)
         lines.append(f"누적 {len(done)}건: 🏆 낙찰 {c['낙찰']} · 1순위 {c['1순위']} · 하한 미달 {c['하한 미달']}")
-    if len(missed) and len(opened):
-        lines.append(f"💡 참가 가능 공고의 {len(missed) / len(opened) * 100:.0f}%를 넣지 않았어요. "
-                     "낙찰 횟수는 넣은 공고 수에 비례합니다.")
-        # 공정 시험 기준 건당 1순위 약 2.8% (지금 방식, 9개월) → 다 넣었다면 기대 1순위 수
-        lines.append(f"📊 이번 주 {len(opened)}건을 모두 넣었다면 기대 1순위 약 {len(opened) * 0.028:.1f}건 "
-                     f"(넣은 {len(opened) - len(missed)}건 기준 약 {(len(opened) - len(missed)) * 0.028:.1f}건)")
     return "\n".join(lines)
 
 
