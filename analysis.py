@@ -9,13 +9,17 @@ import db
 from config import load_settings
 
 
+# 첨부파일 목록·A값 상세(글자가 길어 전송량이 큼)는 개찰 전 공고에만 필요 → 지난 공고는 받지 않음
 _BASE_SQL = """
         SELECT b.bid_key, b.bid_no, b.bid_ord, b.name, b.org, b.demand_org, b.region,
                b.main_type, b.method, b.contract_method, b.notice_dt, b.close_dt, b.open_dt, b.est_price,
-               b.lower_rate, b.url, b.spec_docs, b.ntce_kind, b.qual_dt, b.begin_dt,
+               b.lower_rate, b.url,
+               CASE WHEN b.open_dt IS NULL OR b.open_dt >= :keep_from THEN b.spec_docs END AS spec_docs,
+               b.ntce_kind, b.qual_dt, b.begin_dt,
                b.perf_limit, b.pq, b.designated, b.ability_list, b.joint_duty, b.detail_bid, b.joint_rate,
                ba.base_amt AS base_amt_notice, ba.a_value, ba.range_begin, ba.range_end,
-               ba.a_apply, ba.pure_cost, ba.a_detail,
+               ba.a_apply, ba.pure_cost,
+               CASE WHEN b.open_dt IS NULL OR b.open_dt >= :keep_from THEN ba.a_detail END AS a_detail,
                p.plan_price, p.base_amt AS base_amt_open,
                o.participants AS participants_open, o.status, o.first_company, o.first_amt, o.first_bizno,
                o.first_rate,
@@ -42,6 +46,10 @@ def _cache_path() -> str:
     return os.path.join(d, "ds_" + hashlib.md5(db.url().encode()).hexdigest()[:10] + ".pkl")
 
 
+def _keep_from() -> str:
+    return (pd.Timestamp.now() - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+
 def _raw_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """(공고 합친 표, 참가지역, 면허제한) — 원격 DB 전송량을 줄이려고 파일에 보관하고 최근 공고만 새로 받음."""
     import os
@@ -64,7 +72,7 @@ def _raw_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     if cache is not None and os.environ.get("GITHUB_ACTIONS") and (now - cache["at"]).total_seconds() < 600:
         return cache["base"], cache["regions"], cache["licenses"]
     if cache is None:
-        base = db.query_df_big(_BASE_SQL)
+        base = db.query_df_big(_BASE_SQL, {"keep_from": _keep_from()})
         regs = db.query_df_big("SELECT bid_key, region FROM regions")
         lics = db.query_df_big("SELECT bid_key, license FROM licenses")
         cache = {"full_at": now, "at": now, "base": base, "regions": regs, "licenses": lics, "sql": _BASE_SQL}
@@ -72,7 +80,7 @@ def _raw_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             print(f"[분석 표 전체 받기] 공고 {len(base):,}행 · 누적 {db.read_mb():,.0f}MB")
     else:
         cut = (cache["at"] - pd.Timedelta(days=CACHE_MARGIN_DAYS)).strftime("%Y-%m-%d")
-        p = {"cut": cut}
+        p = {"cut": cut, "keep_from": _keep_from()}
         _mb0 = db.read_mb()
         base_new = db.query_df(_BASE_SQL + _RECENT_WHERE, p)
         sub = f"SELECT b.bid_key FROM bids b {_RECENT_WHERE}"

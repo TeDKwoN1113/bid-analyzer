@@ -691,7 +691,9 @@ def update_my_bids(progress=None, scan_limit: int = 200) -> str:
         except Exception as e:  # noqa: BLE001
             stopped = stopped or f"자동 찾기 실패: {e}"
     # 이미 받은 개찰순위(상위권)에 우리 회사가 있는데 기록이 없는 공고
-    rk = db.query_df("SELECT bid_key, rank, amount, bizno FROM ranks WHERE rank > 0 AND bizno IS NOT NULL AND bizno <> ''")
+    # 우리 사업자번호 줄만 받음 (개찰순위 전체 9만 줄을 매번 받으면 전송량 낭비)
+    rk = db.query_df("SELECT bid_key, rank, amount, bizno FROM ranks WHERE rank > 0 "
+                     "AND REPLACE(bizno, '-', '') = :b", {"b": biz})
     rk = rk[rk["bizno"].map(_biz) == biz]
     have = set(db.query_df("SELECT bid_key FROM my_bids")["bid_key"])
     auto = rk[~rk["bid_key"].isin(have)]
