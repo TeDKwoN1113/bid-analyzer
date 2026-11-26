@@ -32,8 +32,10 @@ _BASE_SQL = """
 """
 # 최근 공고만 다시 받는 조건 (개찰 결과·낙찰자는 개찰 후 2주 안에 채워짐)
 # 국방(D2B…)은 과거 결과를 매일 조금씩 채우므로 항상 새로 받음 (건수가 적어 부담 없음)
+# 바로 앞 버전 문장 — 이 캐시는 그대로 써도 됨(지난 공고 첨부목록이 더 있을 뿐) → 전체 다시 받기(수백 MB) 피함
+_OLD_SQL = '\n        SELECT b.bid_key, b.bid_no, b.bid_ord, b.name, b.org, b.demand_org, b.region,\n               b.main_type, b.method, b.contract_method, b.notice_dt, b.close_dt, b.open_dt, b.est_price,\n               b.lower_rate, b.url, b.spec_docs, b.ntce_kind, b.qual_dt, b.begin_dt,\n               b.perf_limit, b.pq, b.designated, b.ability_list, b.joint_duty, b.detail_bid, b.joint_rate,\n               ba.base_amt AS base_amt_notice, ba.a_value, ba.range_begin, ba.range_end,\n               ba.a_apply, ba.pure_cost, ba.a_detail,\n               p.plan_price, p.base_amt AS base_amt_open,\n               o.participants AS participants_open, o.status, o.first_company, o.first_amt, o.first_bizno,\n               o.first_rate,\n               r.participants AS participants_final, r.winner, r.win_amt, r.win_rate, r.winner_bizno\n        FROM bids b\n        LEFT JOIN base_amounts ba ON ba.bid_key = b.bid_key\n        LEFT JOIN plans p ON p.bid_key = b.bid_key\n        LEFT JOIN openings o ON o.bid_key = b.bid_key\n        LEFT JOIN results r ON r.bid_key = b.bid_key\n'
 _RECENT_WHERE = "WHERE b.open_dt IS NULL OR b.open_dt >= :cut OR b.notice_dt >= :cut OR b.bid_key LIKE 'D2B%'"
-CACHE_FULL_DAYS = 7      # 이 주기로 전체를 새로 받음 (삭제·정정 반영)
+CACHE_FULL_DAYS = 30     # 이 주기로 전체를 새로 받음 (삭제·정정 반영) — 무료 전송량 때문에 7일 → 30일
 CACHE_MARGIN_DAYS = 14   # 마지막으로 받은 날보다 이만큼 앞부터 다시 받음
 _mem: dict = {}
 
@@ -62,7 +64,7 @@ def _raw_frames() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             with open(path, "rb") as f:
                 cache = pickle.load(f)
             mark = db.get_kv("dataset_full_reload_after")
-            if (now - cache["full_at"]).days >= CACHE_FULL_DAYS or cache.get("sql") != _BASE_SQL or \
+            if (now - cache["full_at"]).days >= CACHE_FULL_DAYS or cache.get("sql") not in (_BASE_SQL, _OLD_SQL) or \
                     (mark and pd.Timestamp(mark) > cache["full_at"]):
                 cache = None   # 오래됐거나, 항목이 바뀌었거나, 과거 자료를 새로 채웠으면 전체 다시
         except Exception:  # noqa: BLE001  손상된 파일은 무시하고 전체 다시 받기
