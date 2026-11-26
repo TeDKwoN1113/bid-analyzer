@@ -1196,6 +1196,14 @@ def history_line(hist: dict, bid_key: str) -> str | None:
     return " → ".join(out) if len(out) > 1 else None
 
 
+def _ranks_for(keys) -> pd.DataFrame:
+    """주어진 공고들의 개찰순위 금액만 (무료 전송량 절약). 공고번호는 영문·숫자·-·_ 만 허용."""
+    ks = sorted({k for k in pd.Series(keys).astype(str) if re.fullmatch(r"[A-Za-z0-9_\-]+", k)})
+    parts = [db.query_df("SELECT bid_key, amount FROM ranks WHERE rank > 0 AND amount IS NOT NULL AND bid_key IN ("
+                         + ",".join(f"'{k}'" for k in ks[i:i + 500]) + ")") for i in range(0, len(ks), 500)]
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=["bid_key", "amount"])
+
+
 def pick_scorecard(df: pd.DataFrame) -> pd.DataFrame:
     """개찰 전에 기록해 둔 추천(pick_log)대로 넣었다면 결과가 어땠는지 (미래 정보 없이 공정한 성적)."""
     pl = db.query_df("SELECT bid_key, day, sajung, amount FROM pick_log")
@@ -1213,10 +1221,7 @@ def pick_scorecard(df: pd.DataFrame) -> pd.DataFrame:
     s_, a, b = v["sajung_pick"], v["sajung"], v["winner_sajung"]
     v["결과"] = np.where(s_ < a, "하한 미달",
                        np.where(b.notna() & (s_ < b), "🏆 낙찰", np.where(b.notna(), "낙찰자보다 높음", "결과 대기")))
-    # 채점할 공고의 개찰순위만 받음 (전체 9만 줄을 매번 받으면 전송량 낭비)
-    keys = sorted({k for k in v["bid_key"].astype(str) if re.fullmatch(r"[A-Za-z0-9_\-]+", k)})
-    rk = db.query_df("SELECT bid_key, amount FROM ranks WHERE rank > 0 AND amount IS NOT NULL AND bid_key IN ("
-                     + ",".join(f"'{k}'" for k in keys) + ")") if keys else pd.DataFrame(columns=["bid_key", "amount"])
+    rk = _ranks_for(v["bid_key"])   # 채점할 공고의 개찰순위만 받음 (전체 9만 줄을 매번 받으면 전송량 낭비)
     amounts = {k: np.sort(g["amount"].values) for k, g in rk.groupby("bid_key")} if len(rk) else {}
 
     def vrank(r):
@@ -1443,7 +1448,7 @@ def backtest(df: pd.DataFrame, keywords, test_days: int = 90, max_tests: int = 3
     if len(tests) > max_tests:
         tests = tests.sample(max_tests, random_state=0).sort_values("open_date")
     # 개찰순위(상위 업체 투찰금액)가 있으면 '가상 순위'까지 계산
-    rk = db.query_df("SELECT bid_key, amount FROM ranks WHERE rank > 0 AND amount IS NOT NULL")
+    rk = _ranks_for(tests["bid_key"])
     amounts = {k: np.sort(g["amount"].values) for k, g in rk.groupby("bid_key")} if len(rk) else {}
     # 업종·지역 표시를 전체 기간에 대해 한 번만 계산 (시험 공고마다 15만 건을 다시 거르지 않도록)
     kw_all = tuple(keywords or ())
