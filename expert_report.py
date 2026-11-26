@@ -249,6 +249,48 @@ def our_bids_analysis(df: pd.DataFrame) -> None:
             print("개찰 전 기록한 추천(성적표) 결과:", sc[cols[0]].value_counts().to_dict(), f"(총 {len(sc)}건)")
 
 
+# ---------------- 7. 사정율 끝자리 ----------------
+def digit_analysis(done: pd.DataFrame) -> None:
+    section("7. 사정율 끝자리: 경쟁사가 딱 떨어지는 숫자(.x0)에 몰리나, 끝자리를 바꾸면 더 이기나")
+    rk = analysis.load_ranks(done["bid_key"], light=True)
+    rk = rk[rk["투찰사정율"].notna()]
+    if rk.empty:
+        print("개찰순위 자료 없음")
+        return
+    # 투찰사정율의 0.01%p 안 위치 (0.000 ~ 0.0099): 경쟁사가 소수 둘째 자리로 정해 넣으면 0 근처에 몰림
+    frac = ((rk["투찰사정율"] * 100) % 1)
+    near0 = ((frac < 0.1) | (frac > 0.9)).mean() * 100
+    print(f"공고 {rk['bid_key'].nunique():,}건 · 상위권 투찰 {len(rk):,}개")
+    print(f"소수 둘째 자리에 딱 맞춘 투찰(±0.001%p) 비율: {near0:.1f}% (아무렇게나면 20%)")
+    h = np.histogram(frac, bins=10, range=(0, 1))[0]
+    print("셋째 자리 분포(%): " + " ".join(f"{i}:{x / h.sum() * 100:.1f}" for i, x in enumerate(h)))
+    # 끝자리 바꾸기 시험: 공고마다 실제 사정율 a, 1순위 사정율 w (상위권 투찰 중 a 이상 최소) →
+    # 98~102% 를 0.01%p 간격으로 넣되 끝자리를 +0.000 ~ +0.009 로 바꿨을 때 [a, w) 안에 드는 공고 수
+    act = done.set_index("bid_key")["sajung"]
+    wins = np.zeros(10)
+    n = 0
+    for k, g in rk.groupby("bid_key"):
+        a = act.get(k)
+        if a is None or pd.isna(a):
+            continue
+        v = g["투찰사정율"].to_numpy()
+        above = v[v >= a - 1e-9]
+        if not len(above):
+            continue
+        w = above.min()
+        n += 1
+        for i in range(10):
+            o = i / 1000
+            lo_ = np.ceil((a - o) * 100 - 1e-9) / 100 + o      # a 이상인 첫 격자점
+            wins[i] += 1 if lo_ < w - 1e-12 else 0
+    print(f"\n끝자리별 '1순위가 됐을' 공고 수 (공고 {n:,}건, 0.01%p 간격 중 한 점이라도 낙찰구간에 든 경우)")
+    print(" ".join(f"+0.00{i}:{int(x)}" for i, x in enumerate(wins)))
+    if wins.sum():
+        best = int(np.argmax(wins))
+        print(f"가장 많이 이긴 끝자리 +0.00{best} ({int(wins[best])}건) · 끝자리 0 ({int(wins[0])}건) · "
+              f"평균 {wins.mean():.1f}건 — 차이가 몇 건 수준이면 우연 범위")
+
+
 def small_org_bids() -> pd.DataFrame:
     df = analysis.load_dataset()
     d = analysis.apply_filters(df[df["open_date"].notna()], keywords=analysis.company_keywords())
@@ -256,17 +298,21 @@ def small_org_bids() -> pd.DataFrame:
     return d[r.str.contains("소수 참가", regex=False)]
 
 
-def main() -> None:
+def main(only: str = "") -> None:
     df = analysis.load_dataset()
     done = eligible_done(df)
     if done.empty:
         print("분석할 공고 없음")
         return
+    if only.strip().lower() == "digits":
+        digit_analysis(done)
+        return
     try:
         our_bids_analysis(df)
     except Exception as e:  # noqa: BLE001
         print("[our_bids_analysis 실패]", e)
-    for f in (qualification_analysis, org_analysis, prelim_analysis, competitor_analysis, participant_analysis):
+    for f in (qualification_analysis, org_analysis, prelim_analysis, competitor_analysis, participant_analysis,
+              digit_analysis):
         try:
             f(done)
         except Exception as e:  # noqa: BLE001
@@ -274,4 +320,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    main(sys.argv[1] if len(sys.argv) > 1 else "")

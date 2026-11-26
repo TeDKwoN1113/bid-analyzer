@@ -73,7 +73,9 @@ jobs:
         run: python backtest_report.py
       - name: 전문가 분석 (수동 실행)
         if: github.event_name != 'schedule' && inputs.mode == 'expert'
-        run: python expert_report.py
+        env:
+          BIDS: ${{ inputs.bids }}
+        run: python expert_report.py "$BIDS"
       - name: 저장 공간 정리 (수동 실행)
         if: github.event_name != 'schedule' && inputs.mode == 'maint'
         run: python collector.py --maintenance

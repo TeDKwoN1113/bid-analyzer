@@ -625,16 +625,25 @@ def prelim_position_stats(bid_keys) -> pd.DataFrame:
     return df
 
 
-def load_ranks(bid_keys=None) -> pd.DataFrame:
-    """개찰순위(업체별 투찰) + 각 업체가 노린 사정율."""
-    df = db.query_df(
-        """SELECT k.bid_key, k.rank, k.bizno, k.company, k.amount, k.rate, k.note,
-                  b.name, b.org, b.open_dt, b.lower_rate,
-                  COALESCE(p.base_amt, ba.base_amt) AS base_amt, ba.a_value, p.plan_price
+def load_ranks(bid_keys=None, light: bool = False) -> pd.DataFrame:
+    """개찰순위(업체별 투찰) + 각 업체가 노린 사정율.
+    bid_keys 를 주면 그 공고만 DB 에서 받음, light=True 면 공고명 등 긴 글자는 빼고 받음 (무료 전송량 절약)."""
+    cols = ("k.bid_key, k.rank, k.bizno, k.company, k.amount, b.org, b.open_dt, b.lower_rate, "
+            "COALESCE(p.base_amt, ba.base_amt) AS base_amt, ba.a_value")
+    if not light:
+        cols += ", k.rate, k.note, b.name, p.plan_price"
+    sql = f"""SELECT {cols}
            FROM ranks k JOIN bids b ON b.bid_key = k.bid_key
            LEFT JOIN base_amounts ba ON ba.bid_key = k.bid_key
            LEFT JOIN plans p ON p.bid_key = k.bid_key
-           WHERE k.rank > 0""")
+           WHERE k.rank > 0"""
+    if bid_keys is None:
+        df = db.query_df(sql)
+    else:
+        ks = sorted({k for k in pd.Series(list(bid_keys)).astype(str) if re.fullmatch(r"[A-Za-z0-9_\-]+", k)})
+        parts = [db.query_df(sql + " AND k.bid_key IN (" + ",".join(f"'{k}'" for k in ks[i:i + 500]) + ")")
+                 for i in range(0, len(ks), 500)]
+        df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     if df.empty:
         return df
     if bid_keys is not None:

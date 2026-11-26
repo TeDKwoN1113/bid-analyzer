@@ -196,10 +196,10 @@ def _kepco_all(sample: bool):
     return kepco.load()
 
 
-@st.cache_resource(ttl=3600, max_entries=2)
-def _ranks(sample: bool):   # 한 벌만 보관 (cache_data 는 부를 때마다 복사본을 만들어 느림)
+@st.cache_resource(ttl=6 * 3600, max_entries=2)
+def _ranks(sample: bool):   # 한 벌만 보관 (cache_data 는 부를 때마다 복사본을 만들어 느림) · 6시간마다 (전송량 절약)
     db.use_sample(sample)
-    return analysis.load_ranks()
+    return analysis.load_ranks(light=True)
 df = analysis.apply_filters(
     raw, keywords=keywords, regions=regions,
     min_amt=amt_range[0] * 1e8 or None, max_amt=amt_range[1] * 1e8,
