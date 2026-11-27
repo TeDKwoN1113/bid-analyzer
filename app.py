@@ -328,7 +328,7 @@ if page == "🏠 오늘의 투찰":
     # ── 공고 일정 달력 (참가등록마감·투찰마감·개찰 건수) ──
     wd = "월화수목금토일"
     days = [now.normalize() + pd.Timedelta(days=i) for i in range(-3, 13)]
-    qd_all = analysis.reg_deadline(elig).dt.normalize()
+    qd_all = analysis.reg_deadline(todo).dt.normalize()   # 아래 목록과 같은 기준(투찰 가능 공고)으로 셈
     close_all = elig["close_date"].dt.normalize()
     try:  # 한전 공고(참가 가능)도 달력에 함께 — 입찰신청 마감이 중요
         import kepco
@@ -348,14 +348,13 @@ if page == "🏠 오늘의 투찰":
                 "투찰마감": todo["마감기준"].dt.normalize().value_counts(),
                 "개찰": todo["open_date"].dt.normalize().value_counts()}
     _labels = [f"{d:%m/%d}({wd[d.weekday()]})" for d in days]
-    cal_df = pd.DataFrame({lab: [int(vc.get(d, 0)) or None for vc in cal_rows.values()]
-                           for lab, d in zip(_labels, days)}, index=list(cal_rows))
+    cal_df = pd.DataFrame({lab: [str(int(vc.get(d, 0))) if int(vc.get(d, 0)) else "" for vc in cal_rows.values()]
+                           for lab, d in zip(_labels, days)}, index=list(cal_rows))   # 0건은 빈 칸
     _today_lab = f"{now:%m/%d}({wd[now.weekday()]})"
     st.caption("📅 숫자를 누르면 그 공고만 아래에 보여요 (빈 칸은 0건)")
     st.session_state.setdefault("cal_reset", 0)
     ev = st.dataframe(
-        cal_df.style.format(lambda v: "" if pd.isna(v) else f"{int(v)}")
-        .map(lambda v: "color:#cf222e;font-weight:700" if pd.notna(v) else "")
+        cal_df.style.map(lambda v: "color:#cf222e;font-weight:700;text-align:center" if v else "")
         .apply(lambda c: ["background-color:#fff5f7"] * len(c) if c.name == _today_lab else [""] * len(c)),
         on_select="rerun", selection_mode="single-cell", key=f"cal_pick_{st.session_state['cal_reset']}",
         width="stretch", height=145)
@@ -388,18 +387,21 @@ if page == "🏠 오늘의 투찰":
     # ── 빠른 필터 (버튼마다 건수) ──
     _reg = analysis.reg_deadline(todo)
     _nos = todo["bid_no"]
+    def _bool(x) -> pd.Series:   # 공고가 0건이어도 안전하게 참/거짓 표로 (빈 표에서 오류 나던 문제)
+        return pd.Series(x, index=todo.index, dtype=object).fillna(False).astype(bool)
+
     _masks = {
-        "오늘 마감": todo["마감기준"].dt.normalize() == now.normalize(),
-        "3일 내 마감": todo["마감기준"] <= now + pd.Timedelta(days=3),
-        "⛔ 참가등록 필요": (_reg >= now) & ~_nos.map(lambda n: bool(_t(n).get("joined"))),
-        "⭐ 관심": _nos.map(lambda n: bool(_t(n).get("fav"))),
-        "📝 메모": _nos.map(lambda n: bool(_memo(n))),
-        "✅ 투찰 완료": _nos.map(lambda n: bool(_t(n).get("bid_done")) or n in mine_map),
+        "오늘 마감": _bool(todo["마감기준"].dt.normalize() == now.normalize()),
+        "3일 내 마감": _bool(todo["마감기준"] <= now + pd.Timedelta(days=3)),
+        "⛔ 참가등록 필요": _bool(_reg >= now) & ~_bool(_nos.map(lambda n: bool(_t(n).get("joined")))),
+        "⭐ 관심": _bool(_nos.map(lambda n: bool(_t(n).get("fav")))),
+        "📝 메모": _bool(_nos.map(lambda n: bool(_memo(n)))),
+        "✅ 투찰 완료": _bool(_nos.map(lambda n: bool(_t(n).get("bid_done")) or n in mine_map)),
     }
-    _chip_lab = {f"{k} {int(m.fillna(False).sum())}": k for k, m in _masks.items()}
+    _chip_lab = {f"{k} {int(m.sum())}": k for k, m in _masks.items()}
     chip = st.pills("빠른 필터", list(_chip_lab), key="quick_chip")
-    if chip:
-        todo = todo[_masks[_chip_lab[chip]].fillna(False).astype(bool)]
+    if chip and _chip_lab.get(chip):
+        todo = todo[_masks[_chip_lab[chip]]]
 
     c_a, c_b = st.columns([2, 1])
     only_base = c_a.toggle("기초금액 공개된 공고만", value=False)
