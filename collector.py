@@ -407,9 +407,9 @@ def auto(progress=print) -> dict:
     if progress:
         progress(f"[누적 내려받음 {db.read_mb():,.0f}MB] 개찰순위 후")
     summary["우리 투찰"] = update_my_bids(progress)
-    # 대표는 참가 가능 공고에 모두 투찰함 → 지난 1년 공고도 개찰순위에서 우리 투찰을 조금씩 찾아 채움 (실행마다 150건)
+    # 대표는 참가 가능 공고에 모두 투찰함 → 지난 1년 공고도 개찰순위에서 우리 투찰을 찾아 채움 (실행마다 400건)
     try:
-        summary["우리 투찰(지난 1년 찾기)"] = update_my_bids(progress, scan_limit=150, days=365)
+        summary["우리 투찰(지난 1년 찾기)"] = update_my_bids(progress, scan_limit=400, days=365)
     except Exception as e:  # noqa: BLE001
         if progress:
             progress(f"지난 투찰 찾기 실패: {e}")
