@@ -428,7 +428,7 @@ if page == "🏠 오늘의 투찰":
     n_focus = sum(_focus(k) for k in todo.head(80)["bid_key"])
     if n_focus:
         st.success(f"★ 집중 공고 {n_focus}건 — 경쟁이 상대적으로 적은 유형(지역범위·계약방식·금액대)입니다. "
-                   "공정 시험에서 이런 공고의 1순위 확률이 공고당 약 2배(4.6% 대 2.1%)였어요. 먼저 챙기세요.")
+                   "참가 업체가 적을 것으로 예상되는 공고예요. (2026-11-27 다시 시험해 보니 1순위 확률이 더 높다는 근거는 우연 범위라 참고만 하세요)")
     order = st.radio("정렬", ["마감 임박순", "★ 경쟁 적은순", "낙찰확률 높은순"], horizontal=True,
                      label_visibility="collapsed")
     if order == "★ 경쟁 적은순":

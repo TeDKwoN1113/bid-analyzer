@@ -900,7 +900,7 @@ def expected_participants(tier_list) -> float | None:
     return None
 
 
-FOCUS_MAX_PARTICIPANTS = 150   # 같은 유형 참가 중앙값이 이 이하면 '★ 집중' (2026-11-25 공정 시험: ★ 공고 1순위율 4.6% vs 나머지 2.1%)
+FOCUS_MAX_PARTICIPANTS = 150   # 같은 유형 참가 중앙값이 이 이하면 '★ 집중' (11-25 시험 4.6% vs 2.1% → 11-27 재시험 1.3% vs 2.7%, 우연 범위: 참고만)
 
 
 def _comp_group(d) -> pd.Series | str:
