@@ -302,6 +302,47 @@ def score(no: str, picks: list[float]) -> None:
         print("  우리 회사 투찰 줄 없음")
 
 
+def pick_stats() -> None:
+    """추천 사정율이 왜 높게 나오는지 — 합계·중앙값만 출력 (공고번호·금액 없음)."""
+    import analysis
+    pl = db.query_df("SELECT bid_key, day, sajung FROM pick_log WHERE day >= :d",
+                     {"d": (pd.Timestamp.now() - pd.Timedelta(days=21)).strftime("%Y-%m-%d")})
+    print("######## 추천 사정율 추이 (날짜별: 건수 · 중앙값 · 100.8% 이상 비율) ########")
+    for d, g in pl.groupby("day"):
+        print(f"  {d}: {len(g)}건 · 중앙 {g['sajung'].median():.2f}% · 100.8↑ {(g['sajung'] >= 100.8).mean() * 100:.0f}%")
+    df = analysis.load_dataset()
+    now = pd.Timestamp.now()
+    t = analysis.apply_filters(df[(df["open_date"] >= now) & df["base_amt"].notna() & df["lower_rate"].notna()],
+                               keywords=analysis.company_keywords(), eligible_only=True)
+    t = t[~analysis.lowest_price(t)]
+    rows = []
+    for _, r in t.iterrows():
+        kw = analysis.bid_keywords(r)
+        tl = analysis.tiers(df, r, kw)
+        h0 = tl[0][1]
+        bl = analysis.pick_bid(df, r, kw, mode="blend")
+        nat = analysis._pick_from_curve(analysis.win_curve(h0))
+        rows.append({"blend": bl["사정율"] if bl else None, "national": nat, "tiers": len(tl),
+                     "n0": analysis.n_windows(h0), "med_actual": h0["sajung"].median(),
+                     "med_gap": (h0["winner_sajung"] - h0["sajung"]).median(),
+                     "med_part": h0["participants"].median(),
+                     "d2b_share": h0["bid_key"].astype(str).str.startswith("D2B").mean() * 100})
+    x = pd.DataFrame(rows)
+    print(f"\n######## 지금 개찰 전 공고 {len(x)}건 (금액 계산 가능) ########")
+    if len(x):
+        print(x.describe().round(3).to_string())
+    # 비교 자료(전국 같은 업종)에서 실제 사정율·낙찰구간이 최근에 바뀌었나
+    ind = analysis._context(df, analysis.company_keywords(), db.company()["region"])["ind"]
+    ind = ind[ind["sajung"].notna()]
+    for lab, g in (("최근 30일", ind[ind["open_date"] >= now - pd.Timedelta(days=30)]),
+                   ("30~120일 전", ind[(ind["open_date"] < now - pd.Timedelta(days=30)) & (ind["open_date"] >= now - pd.Timedelta(days=120))]),
+                   ("120일 이전", ind[ind["open_date"] < now - pd.Timedelta(days=120)])):
+        gap = (g["winner_sajung"] - g["sajung"])
+        print(f"  [{lab}] {len(g)}건 · 실제 중앙 {g['sajung'].median():.3f} · 낙찰구간 중앙 {gap.median():.4f}%p · "
+              f"구간 0.1%p 넘음 {(gap > 0.1).mean() * 100:.1f}% · 참가 중앙 {g['participants'].median():.0f} · "
+              f"국방 {g['bid_key'].astype(str).str.startswith('D2B').mean() * 100:.0f}%")
+
+
 if __name__ == "__main__":
     if sys.argv[1:] and sys.argv[1].strip().upper().startswith("DEEP:"):
         load_settings()
@@ -316,6 +357,10 @@ if __name__ == "__main__":
         load_settings()
         parts = sys.argv[1].split(":")[1:]
         score(parts[0].strip(), [float(x) for x in parts[1:]] or [100.0])
+        sys.exit(0)
+    if sys.argv[1:] and sys.argv[1].strip().upper() == "PICKSTATS":
+        load_settings()
+        pick_stats()
         sys.exit(0)
     if sys.argv[1:] and sys.argv[1].strip().upper() == "KEPCO":
         load_settings()
