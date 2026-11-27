@@ -339,34 +339,51 @@ if page == "🏠 오늘의 투찰":
             close_all = pd.concat([close_all, _kb["end_dt"].dt.normalize()])
     except Exception:  # noqa: BLE001
         pass
+    _kb_reg = None
+    try:
+        _kb_reg = _kb  # 한전 공고(입찰신청 마감) — 달력에서 누르면 아래에 따로 보여줌
+    except NameError:
+        pass
     cal_rows = {"참가등록마감(국방·한전)": qd_all.value_counts(),
-                "투찰마감": close_all.value_counts(),
-                "개찰": elig["open_date"].dt.normalize().value_counts()}
-    head = "".join(
-        f"<th style='{'background:#ffe3ea;' if d == now.normalize() else ''}"
-        f"{'color:#cf222e;' if d.weekday() == 6 else 'color:#1f6feb;' if d.weekday() == 5 else ''}'>"
-        f"{d:%m/%d}<br>{wd[d.weekday()]}</th>" for d in days)
-    body = ""
-    for name, vc in cal_rows.items():
-        cells = ""
-        for d in days:
-            n = int(vc.get(d, 0))
-            bg = "background:#fff5f7;" if d == now.normalize() else ""
-            cells += f"<td style='{bg}{'color:#cf222e;font-weight:700' if n else 'color:#bbb'}'>{n}</td>"
-        body += f"<tr><th style='text-align:left;white-space:nowrap'>{name}</th>{cells}</tr>"
-    st.markdown(
-        "<div style='overflow-x:auto'><table style='border-collapse:collapse;font-size:0.8rem;text-align:center;"
-        "width:100%'><tr><th></th>" + head + "</tr>" + body + "</table></div>"
-        "<style>div[data-testid='stMarkdownContainer'] table td, div[data-testid='stMarkdownContainer'] table th"
-        "{border:1px solid #e5e7eb;padding:3px 4px;}</style>", unsafe_allow_html=True)
-    future = [d for d in days if d >= now.normalize()]
-    close_vc = todo["마감기준"].dt.normalize().value_counts()
-    opts = ["전체"] + [f"{d:%m/%d}({wd[d.weekday()]}) {int(close_vc.get(d, 0))}건" for d in future
-                     if close_vc.get(d, 0)]
-    pick_day = st.pills("투찰마감일로 보기", opts, default="전체", key="cal_day")
-    if pick_day and pick_day != "전체":
-        md = pick_day.split("(")[0]
-        todo = todo[todo["마감기준"].dt.strftime("%m/%d") == md]
+                "투찰마감": todo["마감기준"].dt.normalize().value_counts(),
+                "개찰": todo["open_date"].dt.normalize().value_counts()}
+    _labels = [f"{d:%m/%d}({wd[d.weekday()]})" for d in days]
+    cal_df = pd.DataFrame({lab: [int(vc.get(d, 0)) or None for vc in cal_rows.values()]
+                           for lab, d in zip(_labels, days)}, index=list(cal_rows))
+    _today_lab = f"{now:%m/%d}({wd[now.weekday()]})"
+    st.caption("📅 숫자를 누르면 그 공고만 아래에 보여요 (빈 칸은 0건)")
+    st.session_state.setdefault("cal_reset", 0)
+    ev = st.dataframe(
+        cal_df.style.format(lambda v: "" if pd.isna(v) else f"{int(v)}")
+        .map(lambda v: "color:#cf222e;font-weight:700" if pd.notna(v) else "")
+        .apply(lambda c: ["background-color:#fff5f7"] * len(c) if c.name == _today_lab else [""] * len(c)),
+        on_select="rerun", selection_mode="single-cell", key=f"cal_pick_{st.session_state['cal_reset']}",
+        width="stretch", height=145)
+    cells = getattr(getattr(ev, "selection", None), "cells", None) or []
+    if cells:
+        _ri, _col = cells[0][0], cells[0][1]
+        _kind = list(cal_rows)[_ri] if isinstance(_ri, int) else str(_ri)
+        _d = days[_labels.index(_col)] if _col in _labels else None
+        if _d is not None:
+            if _kind.startswith("참가등록"):
+                _r = analysis.reg_deadline(todo).dt.normalize()
+                todo = todo[_r == _d]
+            elif _kind == "투찰마감":
+                todo = todo[todo["마감기준"].dt.normalize() == _d]
+            else:
+                todo = todo[todo["open_date"].dt.normalize() == _d]
+            cc1, cc2 = st.columns([4, 1])
+            cc1.info(f"📅 {_col} {_kind} 공고 {len(todo)}건만 보는 중")
+            if cc2.button("전체 보기", key="cal_clear"):
+                st.session_state["cal_reset"] += 1
+                st.rerun()
+            if _kind.startswith("참가등록") and _kb_reg is not None and not _kb_reg.empty:
+                _kx = _kb_reg[_kb_reg["attend_close_dt"].dt.normalize() == _d]
+                if len(_kx):
+                    st.markdown(f"**🔌 한전 입찰신청 마감 {len(_kx)}건** (자세한 내용은 🔌 한전 입찰 화면)")
+                    st.dataframe(_kx[["name", "attend_close_dt", "end_dt"]].rename(columns={
+                        "name": "공고명", "attend_close_dt": "입찰신청 마감", "end_dt": "투찰 마감"}),
+                        hide_index=True, width="stretch")
 
     # ── 빠른 필터 (버튼마다 건수) ──
     _reg = analysis.reg_deadline(todo)
