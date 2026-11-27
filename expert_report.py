@@ -291,6 +291,88 @@ def digit_analysis(done: pd.DataFrame) -> None:
               f"평균 {wins.mean():.1f}건 — 차이가 몇 건 수준이면 우연 범위")
 
 
+# ---------------- 8. 왜 1순위가 안 되나 (연구) ----------------
+def why_lose(df: pd.DataFrame, done: pd.DataFrame) -> None:
+    section("8. 왜 1순위가 안 되나 — 연구 (비율·%p만)")
+    region = db.company()["region"] or "울산"
+    ind = analysis._context(df, analysis.company_keywords(), region)["ind"]
+    ind = ind[ind["sajung"].between(97, 103) & ind["winner_sajung"].notna() & (ind["winner_sajung"] >= ind["sajung"])]
+    ind = ind.sort_values("open_date")
+    gap = ind["winner_sajung"] - ind["sajung"]
+    print(f"[시장 전체: 같은 업종 개찰 {len(ind):,}건]")
+
+    # (D) 실제 사정율이 어디에 떨어졌을 때 1등 폭이 넓은가 — '높은 빈자리 공략'의 근거 확인
+    q = pd.qcut(ind["sajung"], 5, labels=["가장 낮음", "낮음", "가운데", "높음", "가장 높음"])
+    t = pd.DataFrame({"실제 위치": q, "폭": gap, "참가": ind["participants"]}).groupby("실제 위치", observed=True).agg(
+        공고=("폭", "size"), 실제범위=("폭", lambda x: ""), 폭중앙=("폭", "median"),
+        폭평균=("폭", "mean"), 폭_0_05넘음=("폭", lambda x: (x > 0.05).mean() * 100), 참가중앙=("참가", "median"))
+    rng = ind.groupby(q, observed=True)["sajung"].agg(["min", "max"])
+    t["실제범위"] = [f"{a:.2f}~{b:.2f}" for a, b in rng.values]
+    print("\n(1) 실제 사정율 위치별 1등 폭 (폭이 넓을수록 그 위치를 노린 사람이 이기기 쉬움)")
+    print(t.round(4).to_string())
+
+    # (A) 실제 사정율을 미리 알 수 있나 — 공고 전 정보로 나눈 그룹 중앙값 vs 전체 중앙값 (그 공고 이전 자료만)
+    def col(c):
+        return ind[c] if c in ind else None
+    feats = {
+        "예가범위(±2/±3)": (col("range_end").abs() + col("range_begin").abs()).round(1).astype(str)
+        if col("range_end") is not None and col("range_begin") is not None else None,
+        "금액대": pd.cut(ind["base_amt"], [0, 5e7, 1e8, 3e8, 1e9, 1e12], labels=False).astype(str),
+        "지역제한 여부": (col("allowed_regions").fillna("") != "").astype(str) if col("allowed_regions") is not None else None,
+        "계약방법": col("contract_method").fillna("").str[:4] if col("contract_method") is not None else None,
+        "기관": col("org").fillna("") if col("org") is not None else None,
+        "요일": ind["open_date"].dt.dayofweek.astype(str),
+        "월": ind["open_date"].dt.month.astype(str),
+    }
+    print("\n(2) 실제 사정율을 공고 정보로 미리 맞힐 수 있나 (그 공고 이전 자료만, 오차가 작을수록 예측 가능)")
+    vals = ind["sajung"].to_numpy()
+    for name, f in feats.items():
+        if f is None:
+            continue
+        hist_all, by_g, ea, eg = [], {}, [], []
+        for v, g in zip(vals, f.to_numpy()):
+            pg = by_g.get(g, [])
+            if len(pg) >= 30 and len(hist_all) >= 300:
+                ea.append(abs(v - np.median(hist_all[-500:])))
+                eg.append(abs(v - np.median(pg[-200:])))
+            by_g.setdefault(g, []).append(v)
+            hist_all.append(v)
+        if eg:
+            print(f"  {name}: 시험 {len(eg):,}건 · 그룹 기준 오차 {np.median(eg):.3f}%p vs 전체 기준 {np.median(ea):.3f}%p "
+                  f"(그룹이 더 가까운 경우 {np.mean(np.array(eg) < np.array(ea)) * 100:.0f}%)")
+
+    # (B) 빈자리(경쟁사는 적게 넣는데 실제는 자주 나오는 구간)가 시간이 지나도 같은 곳인가
+    rk = analysis.load_ranks(done["bid_key"], light=True)
+    rk = rk[rk["투찰사정율"].notna()]
+    if len(rk):
+        bins = np.arange(98.6, 101.81, 0.2)
+        mid = done["open_date"].median()
+        rows = []
+        for lab, dd in (("앞 절반", done[done["open_date"] < mid]), ("뒤 절반", done[done["open_date"] >= mid])):
+            r2 = rk[rk["bid_key"].isin(dd["bid_key"])]
+            a_h = np.histogram(ind[ind["open_date"].between(dd["open_date"].min(), dd["open_date"].max())]["sajung"], bins)[0]
+            c_h = np.histogram(r2["투찰사정율"], bins)[0]
+            ratio = (a_h / max(a_h.sum(), 1)) / np.maximum(c_h / max(c_h.sum(), 1), 1e-9)
+            rows.append(ratio)
+        out = pd.DataFrame({"구간": [f"{b:.1f}~{b + 0.2:.1f}" for b in bins[:-1]],
+                            "앞 절반 실제/투찰": rows[0].round(2), "뒤 절반 실제/투찰": rows[1].round(2)})
+        print("\n(3) 구간별 '실제가 나온 비율 ÷ 경쟁사가 넣은 비율' (1보다 크면 빈자리) — 앞·뒤 기간이 비슷하면 믿을 만함")
+        print(out.to_string(index=False))
+        ok = np.isfinite(rows[0]) & np.isfinite(rows[1]) & (rows[0] < 50) & (rows[1] < 50)
+        if ok.sum() >= 5:
+            print(f"  앞·뒤 기간 상관 {np.corrcoef(rows[0][ok], rows[1][ok])[0, 1]:.2f} (1에 가까울수록 빈자리가 꾸준함)")
+
+    # (C) 개찰 전에 기록한 추천이 왜 졌나
+    sc = analysis.pick_scorecard(df)
+    if not sc.empty:
+        sc = sc[sc["결과"] != "결과 대기"]
+        d = sc["sajung_pick"] - sc["sajung"]
+        print(f"\n(4) 개찰 전 기록한 추천 {len(sc)}건 채점: " + " · ".join(f"{k} {v}" for k, v in sc["결과"].value_counts().items()))
+        if len(sc):
+            print(f"  추천 − 실제 사정율 중앙 {d.median():+.3f}%p · 실제가 추천 ±0.1%p 안에 들어온 공고 {(d.abs() <= 0.1).mean() * 100:.0f}% · "
+                  f"추천이 실제보다 0.5%p 넘게 높았던 공고 {(d > 0.5).mean() * 100:.0f}%")
+
+
 def small_org_bids() -> pd.DataFrame:
     df = analysis.load_dataset()
     d = analysis.apply_filters(df[df["open_date"].notna()], keywords=analysis.company_keywords())
@@ -306,6 +388,9 @@ def main(only: str = "") -> None:
         return
     if only.strip().lower() == "digits":
         digit_analysis(done)
+        return
+    if only.strip().lower() == "why":
+        why_lose(df, done)
         return
     try:
         our_bids_analysis(df)
