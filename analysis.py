@@ -1047,7 +1047,19 @@ STRATEGIES = {
     "smooth30": "⑨ 넓게 평활 0.30%p",
     "blend_type": "⑩ 참가 수 유형 맞춤",
     "density": "⑪ 경쟁 밀도 맞춤 (낙찰구간을 예상 참가 수로 환산)",
+    "capped": "⑬ 넓은 구간 상한 0.05%p (참가 적은 공고에 끌려가지 않게)",
+    "capped02": "⑭ 넓은 구간 상한 0.02%p",
 }
+
+
+def capped(tl, cap: float):
+    """과거 공고의 1등 폭을 cap 으로 자름: 참가가 적은 몇몇 공고의 1%p 넘는 넓은 구간이 곡선을 지배해
+    추천이 한쪽(높은 쪽)으로 끌려가는 것을 막음 (2026-11-27 연구: 폭 평균이 중앙값의 20배)."""
+    out = []
+    for name, h in tl:
+        gap = (h["winner_sajung"] - h["sajung"]).clip(upper=cap)
+        out.append((name, h.assign(winner_sajung=(h["sajung"] + gap).where(h["winner_sajung"].notna(), h["winner_sajung"]))))
+    return out
 # 공정 시험 전용(실제 참가 수 = 개찰 후에야 아는 정보) — 참가 수를 완벽히 맞혔을 때의 한계 확인용, 실전 사용 불가
 ORACLE_LABEL = "⑫ (참고) 실제 참가 수를 알았다면"
 
@@ -1123,6 +1135,8 @@ def pick_bid(df: pd.DataFrame, row, keywords=None, use_region: bool = True,
         tl = reg_tiers
     elif mode == "blend_type":
         tl = type_matched(tl, df, row)
+    elif mode in ("capped", "capped02"):
+        tl = capped(tl, 0.05 if mode == "capped" else 0.02)
     elif mode == "density":
         tl = density_scaled(tl, expected_competition(df, row))
     elif mode == "blend_range":
@@ -1460,6 +1474,8 @@ def strategy_picks(hist: pd.DataFrame, row, keywords) -> dict:
         out[label] = _pick_from_curve(win_curve(tl[0][1], width=wd))
     _COMP_CACHE.clear()
     out["⑩ 참가 수 유형 맞춤"] = _pick_from_curve(blend(type_matched(tl, hist, row))[0])
+    out["⑬ 넓은 구간 상한 0.05%p (참가 적은 공고에 끌려가지 않게)"] = _pick_from_curve(blend(capped(tl, 0.05))[0])
+    out["⑭ 넓은 구간 상한 0.02%p"] = _pick_from_curve(blend(capped(tl, 0.02))[0])
     out["⑪ 경쟁 밀도 맞춤 (낙찰구간을 예상 참가 수로 환산)"] = _pick_from_curve(
         blend(density_scaled(tl, expected_competition(hist, row)))[0])
     if pd.notna(row.get("participants")) and row.get("participants"):
