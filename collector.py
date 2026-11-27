@@ -407,12 +407,8 @@ def auto(progress=print) -> dict:
     if progress:
         progress(f"[누적 내려받음 {db.read_mb():,.0f}MB] 개찰순위 후")
     summary["우리 투찰"] = update_my_bids(progress)
-    # 대표는 참가 가능 공고에 모두 투찰함 → 지난 1년 공고도 개찰순위에서 우리 투찰을 찾아 채움 (실행마다 400건)
-    try:
-        summary["우리 투찰(지난 1년 찾기)"] = update_my_bids(progress, scan_limit=400, days=365)
-    except Exception as e:  # noqa: BLE001
-        if progress:
-            progress(f"지난 투찰 찾기 실패: {e}")
+    # (지난 1년 투찰 찾기는 2026-11-27 대표 의견으로 중단: 과거 투찰보다 앞으로의 추천 성적이 중요.
+    #  추천 방법은 시장 전체 자료로 계산하므로 우리 과거 투찰이 없어도 그대로임)
     if progress:
         progress(f"[누적 내려받음 {db.read_mb():,.0f}MB] 우리 투찰 확인 후")
     if progress:
